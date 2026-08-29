@@ -47,6 +47,7 @@ export const NAV_BY_ROLE: Record<Role, { group: string; items: NavItem[] }[]> = 
         { label: "Avatar Studio", to: "/avatar-studio", icon: Palette },
         { label: "Notifications", to: "/notifications", icon: Bell },
         { label: "My Attendance", to: "/attendance", icon: CalendarCheck },
+        { label: "Leave", to: "/leave", icon: Plane },
         { label: "Profile", to: "/profile", icon: UserCircle },
       ],
     },
@@ -67,6 +68,7 @@ export const NAV_BY_ROLE: Record<Role, { group: string; items: NavItem[] }[]> = 
         { label: "Avatar Studio", to: "/avatar-studio", icon: Palette },
         { label: "Notifications", to: "/notifications", icon: Bell },
         { label: "My Attendance", to: "/attendance", icon: CalendarCheck },
+        { label: "Leave", to: "/leave", icon: Plane },
         { label: "Profile", to: "/profile", icon: UserCircle },
       ],
     },
@@ -127,6 +129,7 @@ export const NAV_BY_ROLE: Record<Role, { group: string; items: NavItem[] }[]> = 
       items: [
         { label: "HR", to: "/people", icon: Users },
         { label: "Attendance", to: "/attendance", icon: CalendarCheck },
+        { label: "Leave & Off", to: "/leave", icon: Plane },
       ],
     },
     {

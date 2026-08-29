@@ -1,149 +1,439 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EmptyState, PageHeader, SectionCard } from "@/components/officeverse/primitives";
-import { PeerAvatar } from "@/components/officeverse/peer-avatar";
-import { EMPLOYEES } from "@/lib/officeverse/data";
+import {
+  useAdminLeave,
+  useAdminOff,
+  useDecideLeave,
+  useMyHr,
+  useRequestLeave,
+  type AdminLeaveFilters,
+} from "@/lib/officeverse/use-leave";
+import { useSession } from "@/lib/officeverse/session";
+import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/_shell/leave")({
-  head: () => ({
-    meta: [
-      { title: "Leave — TeleMaster India" },
-      { name: "description", content: "Raise, review and approve leave requests without the email chain." },
-      { property: "og:title", content: "Leave — TeleMaster India" },
-      { property: "og:description", content: "Leave requests, approvals and balances in one place." },
-    ],
-  }),
+  head: () => ({ meta: [{ title: "Leave — TeleMaster India" }] }),
   component: LeavePage,
 });
 
-type Req = { id: string; name: string; type: string; from: string; to: string; reason: string; state: string };
-
-const INITIAL: Req[] = EMPLOYEES.slice(0, 6).map((e, i) => ({
-  id: `L-${100 + i}`,
-  name: e.name,
-  type: (["Casual", "Sick", "Earned", "Comp Off"] as const)[i % 4]!,
-  from: `2026-03-${10 + i}`,
-  to: `2026-03-${11 + i}`,
-  reason: ["Family function", "Fever", "Travel", "Personal work", "Medical checkup", "Wedding"][i]!,
-  state: i < 3 ? "Pending" : i < 5 ? "Approved" : "Rejected",
-}));
+const STATUS_CLASS: Record<string, string> = {
+  APPROVED: "text-success",
+  PENDING: "text-warning",
+  REJECTED: "text-destructive",
+  CANCELLED: "text-muted-foreground",
+};
 
 function LeavePage() {
-  const [reqs, setReqs] = useState<Req[]>(INITIAL);
-  const decide = (id: string, state: string) => {
-    setReqs((r) => r.map((x) => (x.id === id ? { ...x, state } : x)));
-    toast.success(`Request ${state.toLowerCase()}`);
-  };
+  const { user } = useSession();
+  const isManager = user?.role === "admin" || user?.role === "hr";
+  return (
+    <div className="space-y-6">
+      <PageHeader
+        title="Leave & Off"
+        description="Approved leave is expanded with the connected non-working (weekend / holiday) sandwich block. Late→Off (2 = 1) and Short→Off (3 = 1) are separate counters."
+      />
+      <RequestForm />
+      <MyHr />
+      {isManager ? <ManagerLeave /> : null}
+      {isManager ? <ManagerOff /> : null}
+    </div>
+  );
+}
 
-  const groups = ["Pending", "Approved", "Rejected"];
+/* ------------------------------ request ---------------------------- */
+
+function RequestForm() {
+  const m = useRequestLeave();
+  const [f, setF] = useState({ leaveType: "general", startDate: "", endDate: "", reason: "" });
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    if (!f.startDate || !f.endDate) return;
+    m.mutate(f, {
+      onSuccess: () => {
+        toast.success("Leave requested");
+        setF({ leaveType: "general", startDate: "", endDate: "", reason: "" });
+      },
+      onError: () => toast.error("Could not submit leave"),
+    });
+  };
+  return (
+    <SectionCard title="Request leave">
+      <form onSubmit={submit} className="grid gap-3 sm:grid-cols-4">
+        <label className="text-sm">
+          <span className="mb-1 block font-semibold">Type</span>
+          <input
+            className="w-full rounded-lg border border-border bg-card px-2 py-1.5"
+            value={f.leaveType}
+            onChange={(e) => setF({ ...f, leaveType: e.target.value })}
+          />
+        </label>
+        <label className="text-sm">
+          <span className="mb-1 block font-semibold">Start</span>
+          <input
+            type="date"
+            className="w-full rounded-lg border border-border bg-card px-2 py-1.5"
+            value={f.startDate}
+            onChange={(e) => setF({ ...f, startDate: e.target.value })}
+            required
+          />
+        </label>
+        <label className="text-sm">
+          <span className="mb-1 block font-semibold">End</span>
+          <input
+            type="date"
+            className="w-full rounded-lg border border-border bg-card px-2 py-1.5"
+            value={f.endDate}
+            onChange={(e) => setF({ ...f, endDate: e.target.value })}
+            required
+          />
+        </label>
+        <label className="text-sm">
+          <span className="mb-1 block font-semibold">Reason</span>
+          <input
+            className="w-full rounded-lg border border-border bg-card px-2 py-1.5"
+            value={f.reason}
+            onChange={(e) => setF({ ...f, reason: e.target.value })}
+          />
+        </label>
+        <div className="sm:col-span-4">
+          <Button type="submit" className="rounded-lg" disabled={m.isPending}>
+            {m.isPending ? "Submitting…" : "Submit request"}
+          </Button>
+        </div>
+      </form>
+    </SectionCard>
+  );
+}
+
+/* ------------------------------- my HR ---------------------------- */
+
+function MyHr() {
+  const q = useMyHr();
+  const d = q.data;
 
   return (
-    <div className="space-y-7">
-      <PageHeader title="Leave" description="Requests in, decisions out — no email chains." />
+    <SectionCard title="My leave & Off">
+      {q.isLoading ? (
+        <Msg>Loading…</Msg>
+      ) : q.isError ? (
+        <Msg tone="bad">Couldn't load your HR data.</Msg>
+      ) : d?.dbUnavailable ? (
+        <EmptyState
+          emoji="🗄️"
+          title="Database not connected"
+          message="Leave / Off data appears once the DB is configured."
+        />
+      ) : (
+        <div className="space-y-5">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
+            <Stat label="Late" value={d!.counters.lateCount} />
+            <Stat label="Short" value={d!.counters.shortCount} />
+            <Stat label="Late → Off" value={d!.counters.lateOffCount} />
+            <Stat label="Short → Off" value={d!.counters.shortOffCount} />
+            <Stat label="Approved leave" value={d!.counters.approvedLeaveDays} />
+            <Stat label="Sandwich" value={d!.counters.sandwichLeaveDays} />
+            <Stat label="Total leave" value={d!.counters.totalLeaveDays} tone="accent" />
+          </div>
 
-      <div className="grid gap-5 lg:grid-cols-[1.4fr_1fr]">
-        <Tabs defaultValue="Pending">
-          <TabsList className="rounded-full">
-            {groups.map((g) => (
-              <TabsTrigger key={g} value={g} className="rounded-full">
-                {g} ({reqs.filter((r) => r.state === g).length})
-              </TabsTrigger>
-            ))}
-          </TabsList>
-          {groups.map((g) => {
-            const list = reqs.filter((r) => r.state === g);
-            return (
-              <TabsContent key={g} value={g} className="mt-5 space-y-3">
-                {list.length === 0 ? (
-                  <EmptyState title={`Nothing ${g.toLowerCase()}`} message="You're all caught up here." />
-                ) : (
-                  list.map((r) => (
-                    <Card key={r.id} className="surface-panel rounded-2xl border-border/70 p-5">
-                      <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3">
-                        <PeerAvatar name={r.name} size="small" />
-                        <div className="min-w-0">
-                          <p className="truncate font-semibold">{r.name}</p>
-                          <p className="truncate text-xs text-muted-foreground">
-                            {r.type} leave · {r.from} → {r.to}
-                          </p>
-                        </div>
-                        <span className="shrink-0 text-xs text-muted-foreground">{r.id}</span>
-                      </div>
-                      <p className="mt-3 text-sm text-muted-foreground">{r.reason}</p>
-                      {r.state === "Pending" && (
-                        <div className="mt-4 flex gap-2">
-                          <Button size="sm" className="rounded-full" onClick={() => decide(r.id, "Approved")}>
-                            Approve
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="rounded-full"
-                            onClick={() => decide(r.id, "Rejected")}
-                          >
-                            Reject
-                          </Button>
-                        </div>
-                      )}
-                    </Card>
-                  ))
-                )}
-              </TabsContent>
-            );
-          })}
-        </Tabs>
+          <div>
+            <p className="mb-1 text-xs font-semibold uppercase text-muted-foreground">
+              My requests
+            </p>
+            {d!.leave.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No leave requests yet.</p>
+            ) : (
+              <div className="overflow-x-auto rounded-lg border border-border">
+                <table className="w-full text-sm">
+                  <thead className="bg-secondary/60 text-left text-xs uppercase">
+                    <tr>
+                      <th className="px-3 py-2">Type</th>
+                      <th className="px-3 py-2">From</th>
+                      <th className="px-3 py-2">To</th>
+                      <th className="px-3 py-2">Status</th>
+                      <th className="px-3 py-2">Sandwich days (this month)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {d!.leave.map((l) => {
+                      const days = d!.leaveDays.filter((x) => x.leaveRequestId === l.id);
+                      const sw = days.filter((x) => x.dayType !== "ORIGINAL");
+                      return (
+                        <tr key={l.id} className="border-t border-border/60">
+                          <td className="px-3 py-2">{l.leaveType}</td>
+                          <td className="px-3 py-2 text-muted-foreground">{l.startDate}</td>
+                          <td className="px-3 py-2 text-muted-foreground">{l.endDate}</td>
+                          <td className={cn("px-3 py-2 font-semibold", STATUS_CLASS[l.status])}>
+                            {l.status}
+                          </td>
+                          <td className="px-3 py-2 text-xs text-muted-foreground">
+                            {sw.length === 0
+                              ? "—"
+                              : sw.map((x) => `${x.leaveDate} (${x.nonWorkingReason})`).join(", ")}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
 
-        <SectionCard title="Apply for leave" description="Raise a request in 20 seconds">
-          <form
-            className="space-y-4"
-            onSubmit={(e) => {
-              e.preventDefault();
-              toast.success("Leave request submitted", { description: "HR will get back to you shortly." });
-            }}
-          >
-            <div className="space-y-2">
-              <Label htmlFor="type">Leave type</Label>
-              <Select defaultValue="Casual">
-                <SelectTrigger id="type">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {["Casual", "Sick", "Earned", "Comp Off"].map((t) => (
-                    <SelectItem key={t} value={t}>
-                      {t}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="from">From</Label>
-                <Input id="from" type="date" />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="to">To</Label>
-                <Input id="to" type="date" />
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="reason">Reason</Label>
-              <Textarea id="reason" rows={4} placeholder="Keep it short and clear." />
-            </div>
-            <Button type="submit" className="w-full rounded-full py-6 font-bold">
-              Submit request
-            </Button>
-          </form>
-        </SectionCard>
+          <div>
+            <p className="mb-1 text-xs font-semibold uppercase text-muted-foreground">
+              My Off records
+            </p>
+            {d!.off.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No Off records this month.</p>
+            ) : (
+              <ul className="space-y-1 text-sm">
+                {d!.off.map((o) => (
+                  <li
+                    key={o.id}
+                    className="rounded-lg border border-border bg-secondary/30 px-3 py-1.5"
+                  >
+                    <span className="font-semibold">OFF</span> · {o.offType} · {o.sourceDescription}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      )}
+    </SectionCard>
+  );
+}
+
+/* ---------------------------- manager views ---------------------- */
+
+function ManagerLeave() {
+  const [filters, setFilters] = useState<AdminLeaveFilters>({ status: "PENDING" });
+  const q = useAdminLeave(filters);
+  const decide = useDecideLeave();
+  const rows = q.data?.rows ?? [];
+  const set = (k: keyof AdminLeaveFilters, v: string) =>
+    setFilters((p) => {
+      const n = { ...p };
+      if (v) (n as Record<string, string>)[k] = v;
+      else delete n[k];
+      return n;
+    });
+
+  return (
+    <SectionCard title="Leave requests (Admin / HR)">
+      <div className="mb-3 grid gap-2 sm:grid-cols-4">
+        <input
+          type="date"
+          aria-label="From"
+          className="rounded-lg border border-border bg-card px-2 py-1.5 text-sm"
+          value={filters.from ?? ""}
+          onChange={(e) => set("from", e.target.value)}
+        />
+        <input
+          type="date"
+          aria-label="To"
+          className="rounded-lg border border-border bg-card px-2 py-1.5 text-sm"
+          value={filters.to ?? ""}
+          onChange={(e) => set("to", e.target.value)}
+        />
+        <input
+          placeholder="Employee"
+          className="rounded-lg border border-border bg-card px-2 py-1.5 text-sm"
+          value={filters.employee ?? ""}
+          onChange={(e) => set("employee", e.target.value)}
+        />
+        <select
+          className="rounded-lg border border-border bg-card px-2 py-1.5 text-sm"
+          value={filters.status ?? ""}
+          onChange={(e) => set("status", e.target.value)}
+        >
+          <option value="">Any status</option>
+          {["PENDING", "APPROVED", "REJECTED", "CANCELLED"].map((s) => (
+            <option key={s} value={s}>
+              {s}
+            </option>
+          ))}
+        </select>
       </div>
-    </div>
+      {q.isLoading ? (
+        <Msg>Loading…</Msg>
+      ) : q.data?.dbUnavailable ? (
+        <EmptyState
+          emoji="🗄️"
+          title="Database not connected"
+          message="Leave requests appear once the DB is configured."
+        />
+      ) : rows.length === 0 ? (
+        <EmptyState emoji="✅" title="Nothing here" message="No leave matches these filters." />
+      ) : (
+        <div className="overflow-x-auto rounded-lg border border-border">
+          <table className="w-full text-sm">
+            <thead className="bg-secondary/60 text-left text-xs uppercase">
+              <tr>
+                <th className="px-3 py-2">Employee</th>
+                <th className="px-3 py-2">Type</th>
+                <th className="px-3 py-2">From</th>
+                <th className="px-3 py-2">To</th>
+                <th className="px-3 py-2">Reason</th>
+                <th className="px-3 py-2">Status</th>
+                <th className="px-3 py-2" />
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((l) => (
+                <tr key={l.id} className="border-t border-border/60">
+                  <td className="px-3 py-2 font-medium">{l.employeeName ?? "—"}</td>
+                  <td className="px-3 py-2 text-muted-foreground">{l.leaveType}</td>
+                  <td className="px-3 py-2 text-muted-foreground">{l.startDate}</td>
+                  <td className="px-3 py-2 text-muted-foreground">{l.endDate}</td>
+                  <td className="px-3 py-2 text-xs text-muted-foreground">{l.reason ?? "—"}</td>
+                  <td className={cn("px-3 py-2 font-semibold", STATUS_CLASS[l.status])}>
+                    {l.status}
+                  </td>
+                  <td className="px-3 py-2">
+                    {l.status === "PENDING" ? (
+                      <span className="flex gap-1">
+                        {(["APPROVED", "REJECTED"] as const).map((dec) => (
+                          <Button
+                            key={dec}
+                            size="sm"
+                            variant={dec === "APPROVED" ? "default" : "ghost"}
+                            className="rounded-lg"
+                            disabled={decide.isPending}
+                            onClick={() =>
+                              decide.mutate(
+                                { id: l.id, decision: dec },
+                                {
+                                  onSuccess: () => toast.success(`Leave ${dec.toLowerCase()}`),
+                                  onError: (e) => toast.error(e.message || "Failed"),
+                                },
+                              )
+                            }
+                          >
+                            {dec === "APPROVED" ? "Approve" : "Reject"}
+                          </Button>
+                        ))}
+                      </span>
+                    ) : l.status === "APPROVED" ? (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="rounded-lg"
+                        disabled={decide.isPending}
+                        onClick={() =>
+                          decide.mutate(
+                            { id: l.id, decision: "CANCELLED" },
+                            { onSuccess: () => toast.success("Leave cancelled") },
+                          )
+                        }
+                      >
+                        Cancel
+                      </Button>
+                    ) : null}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </SectionCard>
+  );
+}
+
+function ManagerOff() {
+  const [month, setMonth] = useState("");
+  const q = useAdminOff(month ? { month } : {});
+  const rows = q.data?.rows ?? [];
+  return (
+    <SectionCard title="Off records (Admin / HR)">
+      <div className="mb-3">
+        <input
+          type="month"
+          aria-label="Month"
+          className="rounded-lg border border-border bg-card px-2 py-1.5 text-sm"
+          value={month}
+          onChange={(e) => setMonth(e.target.value)}
+        />
+      </div>
+      {q.isLoading ? (
+        <Msg>Loading…</Msg>
+      ) : q.data?.dbUnavailable ? (
+        <EmptyState
+          emoji="🗄️"
+          title="Database not connected"
+          message="Off records appear once the DB is configured."
+        />
+      ) : rows.length === 0 ? (
+        <EmptyState
+          emoji="🟢"
+          title="No Off records"
+          message="No Late/Short conversions for this filter."
+        />
+      ) : (
+        <div className="overflow-x-auto rounded-lg border border-border">
+          <table className="w-full text-sm">
+            <thead className="bg-secondary/60 text-left text-xs uppercase">
+              <tr>
+                <th className="px-3 py-2">Employee</th>
+                <th className="px-3 py-2">Month</th>
+                <th className="px-3 py-2">Off type</th>
+                <th className="px-3 py-2">Source</th>
+                <th className="px-3 py-2">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((o) => (
+                <tr key={o.id} className="border-t border-border/60">
+                  <td className="px-3 py-2 font-medium">{o.employeeName ?? "—"}</td>
+                  <td className="px-3 py-2 text-muted-foreground">{o.periodMonth}</td>
+                  <td className="px-3 py-2 font-semibold">{o.offType}</td>
+                  <td className="px-3 py-2 text-xs text-muted-foreground">{o.sourceDescription}</td>
+                  <td
+                    className={cn(
+                      "px-3 py-2 text-xs font-semibold",
+                      o.status === "VOID" ? "text-muted-foreground" : "text-success",
+                    )}
+                  >
+                    {o.status}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </SectionCard>
+  );
+}
+
+/* ------------------------------ bits --------------------------- */
+
+function Stat({ label, value, tone }: { label: string; value: number; tone?: "accent" }) {
+  return (
+    <Card className="rounded-xl border-border bg-card p-3 shadow-sm">
+      <p className={cn("font-display text-xl font-black", tone === "accent" && "text-accent")}>
+        {value}
+      </p>
+      <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</p>
+    </Card>
+  );
+}
+function Msg({ children, tone }: { children: React.ReactNode; tone?: "bad" }) {
+  return (
+    <Card
+      className={cn(
+        "rounded-xl border-border bg-card p-6 text-center text-sm shadow-sm",
+        tone === "bad"
+          ? "border-destructive/40 bg-destructive/5 font-semibold text-destructive"
+          : "text-muted-foreground",
+      )}
+    >
+      {children}
+    </Card>
   );
 }

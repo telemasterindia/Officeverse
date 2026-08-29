@@ -165,6 +165,19 @@ export const ATTENDANCE_STATUSES = [
 ] as const;
 export const ATTENDANCE_SOURCES = ["derived", "corrected"] as const;
 
+/* HR Leave / Off / Sandwich engine (Phase 11). Regularity bonus, salary
+ * slip, closer incentive and holiday-calendar POPULATION remain DEFERRED. */
+export const LEAVE_STATUSES = ["PENDING", "APPROVED", "REJECTED", "CANCELLED"] as const;
+export const LEAVE_DAY_TYPES = ["ORIGINAL", "SANDWICH_WEEKEND", "SANDWICH_HOLIDAY"] as const;
+export const OFF_TYPES = [
+  "LATE_CONVERSION",
+  "SHORT_ATTENDANCE_CONVERSION",
+  "WEEKLY_OFF",
+  "OTHER_COMPANY_OFF",
+] as const;
+export const OFF_STATUSES = ["ACTIVE", "VOID"] as const;
+export const HOLIDAY_TYPES = ["US_FEDERAL", "INDIAN", "COMPANY", "WEEKLY_OFF"] as const;
+
 /* ------------------------------------------------------------------ *
  *  1 · users  (authentication + all staff identity)                  *
  * ------------------------------------------------------------------ */
@@ -847,6 +860,134 @@ export const attendance = mysqlTable(
 );
 
 /* ------------------------------------------------------------------ *
+ *  17 · leave_requests  (HR Leave / Off / Sandwich — Phase 11)       *
+ *  Calendar-date based (NOT operational shift date). Only APPROVED   *
+ *  rows participate in the sandwich calculation.                     *
+ * ------------------------------------------------------------------ */
+
+export const leaveRequests = mysqlTable(
+  "leave_requests",
+  {
+    id: bigint("id", { mode: "number", unsigned: true }).autoincrement().primaryKey(),
+    userId: int("user_id", { unsigned: true })
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    /** simple extensible label — not a fixed catalogue */
+    leaveType: varchar("leave_type", { length: 40 }).notNull().default("general"),
+    startDate: dcol("start_date").notNull(),
+    endDate: dcol("end_date").notNull(),
+    status: mysqlEnum("status", LEAVE_STATUSES).notNull().default("PENDING"),
+    reason: varchar("reason", { length: 500 }),
+    createdByUserId: int("created_by_user_id", { unsigned: true })
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    approvedByUserId: int("approved_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    approvedAt: dt("approved_at"),
+    decisionNote: varchar("decision_note", { length: 500 }),
+    createdAt: dt("created_at").notNull(),
+    updatedAt: dt("updated_at").notNull(),
+  },
+  (t) => ({
+    userIdx: index("leave_requests_user_idx").on(t.userId, t.startDate),
+    statusIdx: index("leave_requests_status_idx").on(t.status),
+    startIdx: index("leave_requests_start_idx").on(t.startDate),
+  }),
+);
+
+/* ------------------------------------------------------------------ *
+ *  18 · leave_days  (calculated expansion: ORIGINAL + SANDWICH)      *
+ *  The employee's original request is never mutated — this is the    *
+ *  audit-safe, idempotent derived view of what actually counts.      *
+ * ------------------------------------------------------------------ */
+
+export const leaveDays = mysqlTable(
+  "leave_days",
+  {
+    id: bigint("id", { mode: "number", unsigned: true }).autoincrement().primaryKey(),
+    leaveRequestId: bigint("leave_request_id", { mode: "number", unsigned: true })
+      .notNull()
+      .references(() => leaveRequests.id, { onDelete: "cascade", onUpdate: "cascade" }),
+    userId: int("user_id", { unsigned: true })
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    leaveDate: dcol("leave_date").notNull(),
+    dayType: mysqlEnum("day_type", LEAVE_DAY_TYPES).notNull(),
+    /** why a SANDWICH day counts — e.g. SATURDAY / SUNDAY / US_FEDERAL / COMPANY */
+    nonWorkingReason: varchar("non_working_reason", { length: 60 }),
+    calculatedAt: dt("calculated_at").notNull(),
+    ruleVersion: varchar("rule_version", { length: 16 }).notNull().default("v1"),
+    createdAt: dt("created_at").notNull(),
+  },
+  (t) => ({
+    reqDayUq: unique("leave_days_req_day_uq").on(t.leaveRequestId, t.leaveDate),
+    userDateIdx: index("leave_days_user_date_idx").on(t.userId, t.leaveDate),
+    reqIdx: index("leave_days_req_idx").on(t.leaveRequestId),
+  }),
+);
+
+/* ------------------------------------------------------------------ *
+ *  19 · off_records  (Late→Off / Short→Off conversions — Phase 11)   *
+ *  A SEPARATE HR concept from leave. Idempotent via the unique key   *
+ *  (user, off_type, month, off_index).                               *
+ * ------------------------------------------------------------------ */
+
+export const offRecords = mysqlTable(
+  "off_records",
+  {
+    id: bigint("id", { mode: "number", unsigned: true }).autoincrement().primaryKey(),
+    userId: int("user_id", { unsigned: true })
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    offType: mysqlEnum("off_type", OFF_TYPES).notNull(),
+    /** month the conversion belongs to, "YYYY-MM" */
+    periodMonth: varchar("period_month", { length: 7 }).notNull(),
+    /** 1-based ordinal within (user, off_type, month) — the idempotency handle */
+    offIndex: int("off_index", { unsigned: true }).notNull(),
+    /** qualifying events consumed (2 for a Late Off, 3 for a Short Off) */
+    sourceCount: int("source_count", { unsigned: true }).notNull(),
+    sourceDescription: varchar("source_description", { length: 200 }).notNull(),
+    status: mysqlEnum("status", OFF_STATUSES).notNull().default("ACTIVE"),
+    calculatedAt: dt("calculated_at").notNull(),
+    ruleVersion: varchar("rule_version", { length: 16 }).notNull().default("v1"),
+    createdAt: dt("created_at").notNull(),
+    updatedAt: dt("updated_at").notNull(),
+  },
+  (t) => ({
+    idemUq: unique("off_records_idem_uq").on(t.userId, t.offType, t.periodMonth, t.offIndex),
+    userMonthIdx: index("off_records_user_month_idx").on(t.userId, t.periodMonth),
+    typeIdx: index("off_records_type_idx").on(t.offType),
+  }),
+);
+
+/* ------------------------------------------------------------------ *
+ *  20 · holidays  (STRUCTURE ONLY — no dates populated in Phase 11)  *
+ *  The sandwich engine reads non-working days through a provider so  *
+ *  weekends work with zero data here; calendar population is a later *
+ *  dedicated phase.                                                  *
+ * ------------------------------------------------------------------ */
+
+export const holidays = mysqlTable(
+  "holidays",
+  {
+    id: bigint("id", { mode: "number", unsigned: true }).autoincrement().primaryKey(),
+    holidayDate: dcol("holiday_date").notNull(),
+    name: varchar("name", { length: 120 }).notNull(),
+    holidayType: mysqlEnum("holiday_type", HOLIDAY_TYPES).notNull(),
+    /** null = every process; otherwise scoped to one process */
+    appliesToProcess: mysqlEnum("applies_to_process", PROCESS_CODES),
+    observed: boolean("observed").notNull().default(false),
+    createdAt: dt("created_at").notNull(),
+  },
+  (t) => ({
+    dayTypeUq: unique("holidays_day_type_uq").on(t.holidayDate, t.holidayType, t.appliesToProcess),
+    dateIdx: index("holidays_date_idx").on(t.holidayDate),
+  }),
+);
+
+/* ------------------------------------------------------------------ *
  *  15 · schema_meta  (one-row marker: has production been seeded?)    *
  *  Keeps demo/seed data strictly separate from production (Phase 19). *
  * ------------------------------------------------------------------ */
@@ -976,3 +1117,11 @@ export type StaffPhoto = typeof staffPhotos.$inferSelect;
 export type Session = typeof sessions.$inferSelect;
 export type Attendance = typeof attendance.$inferSelect;
 export type NewAttendance = typeof attendance.$inferInsert;
+export type LeaveRequest = typeof leaveRequests.$inferSelect;
+export type NewLeaveRequest = typeof leaveRequests.$inferInsert;
+export type LeaveDay = typeof leaveDays.$inferSelect;
+export type NewLeaveDay = typeof leaveDays.$inferInsert;
+export type OffRecord = typeof offRecords.$inferSelect;
+export type NewOffRecord = typeof offRecords.$inferInsert;
+export type Holiday = typeof holidays.$inferSelect;
+export type NewHoliday = typeof holidays.$inferInsert;
