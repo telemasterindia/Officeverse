@@ -7,6 +7,7 @@ import {
   devResolve,
   devRevoke,
 } from "../auth/dev-auth";
+import { istWallClockToEpochMs } from "../time";
 
 beforeEach(() => {
   __resetDevSessions();
@@ -62,6 +63,31 @@ describe("devLogin", () => {
   it("returns null (no-op) when dev auth is disabled", () => {
     vi.stubEnv("NODE_ENV", "production");
     expect(devLogin("admin@officeverse.dev", "officeverse-dev")).toBeNull();
+  });
+
+  // Regression: the session cookie stack (setSessionCookie → cookieOpts →
+  // istWallClockToEpochMs) requires the Officeverse IST wall-clock format. A
+  // UTC ISO string ("…Z") threw "Not an IST wall-clock string", so loginFn
+  // aborted before Set-Cookie and no ov_session was ever issued in Dev Mode.
+  it("expiresAt is in the IST wall-clock format the session cookie path parses", () => {
+    const before = Date.now();
+    const r = devLogin("admin@officeverse.dev", "officeverse-dev")!;
+
+    expect(r.expiresAt).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    expect(r.expiresAt).not.toContain("T");
+    expect(r.expiresAt).not.toContain("Z");
+
+    // the exact call cookieOpts() makes — must not throw
+    let ms = 0;
+    expect(() => {
+      ms = istWallClockToEpochMs(r.expiresAt);
+    }).not.toThrow();
+    expect(new Date(ms).toString()).not.toBe("Invalid Date");
+
+    // same instant preserved: ~12h out (DEV_TTL_MS), within a minute of rounding
+    const hoursOut = (ms - before) / 3_600_000;
+    expect(hoursOut).toBeGreaterThan(11.9);
+    expect(hoursOut).toBeLessThan(12.1);
   });
 });
 

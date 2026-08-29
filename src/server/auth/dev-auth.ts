@@ -21,6 +21,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { isDbConfigured } from "@/lib/db";
 import { isProd } from "../env";
+import { epochMsToIstWallClock } from "../time";
 import type { User } from "@/lib/db/schema";
 
 export function devAuthEnabled(): boolean {
@@ -102,7 +103,11 @@ export function devLogin(email: string, password: string): DevLoginResult | null
   const token = randomBytes(32).toString("base64url");
   const expiresAtMs = Date.now() + DEV_TTL_MS;
   store.set(hashToken(token), { idx, expiresAtMs });
-  return { token, user: buildUser(idx), expiresAt: new Date(expiresAtMs).toISOString() };
+  // The session cookie stack (setSessionCookie → istWallClockToEpochMs) expects
+  // the Officeverse IST wall-clock format "YYYY-MM-DD HH:MM:SS", exactly as the
+  // real DB path's createSession() produces. A UTC ISO string (…Z) would throw
+  // in the strict parser. Same instant, correct representation.
+  return { token, user: buildUser(idx), expiresAt: epochMsToIstWallClock(expiresAtMs) };
 }
 
 export interface DevSessionContext {

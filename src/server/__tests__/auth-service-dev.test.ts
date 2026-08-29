@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { login, logout } from "../auth/service";
 import { __resetDevSessions, devResolve } from "../auth/dev-auth";
+import { istWallClockToEpochMs } from "../time";
 
 beforeEach(() => {
   __resetDevSessions();
@@ -21,6 +22,16 @@ describe("auth/service login() — dev-auth branch (no DB)", () => {
     expect(res.token.length).toBeGreaterThan(20);
     // the issued token resolves back to the same identity
     expect(devResolve(res.token)?.user.role).toBe("admin");
+  });
+
+  it("the login result's expiresAt is accepted by setSessionCookie's parser (no throw → ov_session is issued)", async () => {
+    const res = await login("hr@officeverse.dev", "officeverse-dev");
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    // loginFn does: setSessionCookie(res.token, res.expiresAt) → cookieOpts →
+    // new Date(istWallClockToEpochMs(res.expiresAt)). Before the fix this threw.
+    expect(() => istWallClockToEpochMs(res.expiresAt)).not.toThrow();
+    expect(new Date(istWallClockToEpochMs(res.expiresAt)).toString()).not.toBe("Invalid Date");
   });
 
   it("wrong password → invalid_credentials (no enumeration)", async () => {
