@@ -17,6 +17,15 @@ import {
   type PayrollStatus,
   type ProcessCode,
 } from "@/lib/officeverse/use-payroll";
+import {
+  useAdminSalarySlips,
+  useDownloadSalarySlip,
+  useGenerateSalarySlip,
+  useMySalarySlips,
+  useSalarySlipHistory,
+  useSendSalarySlip,
+  type AdminSlipFilters,
+} from "@/lib/officeverse/use-salary-slip";
 import { useSession } from "@/lib/officeverse/session";
 import { cn } from "@/lib/utils";
 
@@ -65,9 +74,13 @@ function PayrollPage() {
           <SalaryProfiles />
           <CalculateForm />
           <ManagerPayroll />
+          <ManagerSalarySlips />
         </>
       ) : (
-        <EmployeePayroll />
+        <>
+          <EmployeePayroll />
+          <EmployeeSalarySlips />
+        </>
       )}
     </div>
   );
@@ -309,6 +322,7 @@ function ManagerPayroll() {
   const approve = useApprovePayroll();
   const lock = useLockPayroll();
   const reopen = useReopenPayroll();
+  const generate = useGenerateSalarySlip();
 
   const set = (k: keyof AdminPayrollFilters, v: string) =>
     setFilters((p) => {
@@ -421,6 +435,7 @@ function ManagerPayroll() {
                 <th className="px-3 py-2">Regularity bonus</th>
                 <th className="px-3 py-2">Calculated salary</th>
                 <th className="px-3 py-2">Status</th>
+                <th className="px-3 py-2">Salary slip</th>
                 <th className="px-3 py-2" />
               </tr>
             </thead>
@@ -437,6 +452,34 @@ function ManagerPayroll() {
                   <td className="px-3 py-2 font-semibold">{inr(r.calculatedSalary)}</td>
                   <td className={cn("px-3 py-2 font-semibold", STATUS_CLASS[r.status])}>
                     {r.status}
+                  </td>
+                  <td className="px-3 py-2">
+                    {(r.status === "APPROVED" || r.status === "LOCKED") && r.payrollRunId ? (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="rounded-lg"
+                        disabled={generate.isPending}
+                        onClick={() =>
+                          generate.mutate(
+                            { payrollRunId: r.payrollRunId! },
+                            {
+                              onSuccess: (res) =>
+                                toast.success(
+                                  res.reused
+                                    ? "Salary slip already generated"
+                                    : `Salary slip v${res.slip.version} generated`,
+                                ),
+                              onError: (err) => toast.error(err.message || "Generate failed"),
+                            },
+                          )
+                        }
+                      >
+                        Generate
+                      </Button>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">Approve/lock first</span>
+                    )}
                   </td>
                   <td className="px-3 py-2">
                     <span className="flex flex-wrap gap-1">
@@ -560,6 +603,296 @@ function EmployeePayroll() {
                   <td className="px-3 py-2 font-semibold">{inr(r.calculatedSalary)}</td>
                   <td className={cn("px-3 py-2 font-semibold", STATUS_CLASS[r.status])}>
                     {r.status}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </SectionCard>
+  );
+}
+
+/* ===================== manager salary slips ================ */
+
+const SLIP_STATUS_CLASS: Record<string, string> = {
+  GENERATED: "text-warning",
+  SENT: "text-success",
+  FAILED: "text-destructive",
+};
+
+function ManagerSalarySlips() {
+  const [filters, setFilters] = useState<AdminSlipFilters>({ month: thisMonth() });
+  const q = useAdminSalarySlips(filters);
+  const rows = q.data?.rows ?? [];
+  const send = useSendSalarySlip();
+  const download = useDownloadSalarySlip();
+  const [historyId, setHistoryId] = useState<number | null>(null);
+  const history = useSalarySlipHistory(historyId);
+
+  const set = (k: keyof AdminSlipFilters, v: string) =>
+    setFilters((p) => {
+      const n = { ...p };
+      if (v) (n as Record<string, string>)[k] = v;
+      else delete n[k];
+      return n;
+    });
+
+  return (
+    <SectionCard title="Salary slips (Admin / HR)">
+      <div className="mb-3 flex flex-wrap items-end gap-2">
+        <label className="text-sm">
+          <span className="mb-1 block text-xs font-semibold uppercase text-muted-foreground">
+            Month
+          </span>
+          <input
+            type="month"
+            className="rounded-lg border border-border bg-card px-2 py-1.5 text-sm"
+            value={filters.month ?? ""}
+            onChange={(e) => set("month", e.target.value)}
+          />
+        </label>
+        <label className="text-sm">
+          <span className="mb-1 block text-xs font-semibold uppercase text-muted-foreground">
+            Employee
+          </span>
+          <input
+            className="rounded-lg border border-border bg-card px-2 py-1.5 text-sm"
+            value={filters.employee ?? ""}
+            onChange={(e) => set("employee", e.target.value)}
+            placeholder="name or email"
+          />
+        </label>
+        <label className="text-sm">
+          <span className="mb-1 block text-xs font-semibold uppercase text-muted-foreground">
+            Status
+          </span>
+          <select
+            className="rounded-lg border border-border bg-card px-2 py-1.5 text-sm"
+            value={filters.status ?? ""}
+            onChange={(e) => set("status", e.target.value)}
+          >
+            <option value="">Any</option>
+            {["GENERATED", "SENT", "FAILED"].map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      {q.isLoading ? (
+        <Msg>Loading…</Msg>
+      ) : q.data?.dbUnavailable ? (
+        <EmptyState
+          emoji="🗄️"
+          title="Database not connected"
+          message="Salary slips appear once the DB is configured."
+        />
+      ) : rows.length === 0 ? (
+        <EmptyState
+          emoji="📄"
+          title="No salary slips"
+          message="Generate one from an APPROVED or LOCKED payroll run above."
+        />
+      ) : (
+        <div className="overflow-x-auto rounded-lg border border-border">
+          <table className="w-full text-sm">
+            <thead className="bg-secondary/60 text-left text-xs uppercase">
+              <tr>
+                <th className="px-3 py-2">Employee</th>
+                <th className="px-3 py-2">Month</th>
+                <th className="px-3 py-2">Ver</th>
+                <th className="px-3 py-2">Calculated salary</th>
+                <th className="px-3 py-2">Slip status</th>
+                <th className="px-3 py-2">Sends</th>
+                <th className="px-3 py-2">Last sent</th>
+                <th className="px-3 py-2" />
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((s) => (
+                <tr key={s.id} className="border-t border-border/60">
+                  <td className="px-3 py-2 font-medium">
+                    {s.employeeName}
+                    {s.isPreview ? (
+                      <span className="ml-1 rounded bg-warning/20 px-1 text-[10px] font-semibold uppercase text-warning">
+                        preview
+                      </span>
+                    ) : null}
+                  </td>
+                  <td className="px-3 py-2 text-muted-foreground">{s.month}</td>
+                  <td className="px-3 py-2 text-muted-foreground">v{s.version}</td>
+                  <td className="px-3 py-2 font-semibold">{inr(s.calculatedSalary)}</td>
+                  <td
+                    className={cn(
+                      "px-3 py-2 font-semibold",
+                      SLIP_STATUS_CLASS[s.status] ?? "text-muted-foreground",
+                    )}
+                  >
+                    {s.status}
+                    {s.status === "FAILED" && s.lastError ? (
+                      <span className="block text-[11px] font-normal text-muted-foreground">
+                        {s.lastError}
+                      </span>
+                    ) : null}
+                  </td>
+                  <td className="px-3 py-2">{s.sendCount}</td>
+                  <td className="px-3 py-2 text-xs text-muted-foreground">{s.lastSentAt ?? "—"}</td>
+                  <td className="px-3 py-2">
+                    <span className="flex flex-wrap gap-1">
+                      <Button
+                        size="sm"
+                        className="rounded-lg"
+                        disabled={send.isPending}
+                        onClick={() =>
+                          send.mutate(
+                            { salarySlipId: s.id },
+                            {
+                              onSuccess: () => toast.success("Salary slip emailed"),
+                              onError: (err) => toast.error(err.message || "Send failed"),
+                            },
+                          )
+                        }
+                      >
+                        {s.status === "SENT" ? "Resend" : "Send"}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="rounded-lg"
+                        disabled={download.isPending}
+                        onClick={() => download.mutate({ salarySlipId: s.id })}
+                      >
+                        Download
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="rounded-lg"
+                        onClick={() => setHistoryId(historyId === s.id ? null : s.id)}
+                      >
+                        History
+                      </Button>
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {historyId != null ? (
+        <div className="mt-3 rounded-lg border border-border bg-secondary/20 p-3 text-sm">
+          <p className="mb-1 text-xs font-semibold uppercase text-muted-foreground">
+            Send history — slip #{historyId}
+          </p>
+          {history.isLoading ? (
+            <p className="text-muted-foreground">Loading…</p>
+          ) : (history.data?.sends?.length ?? 0) === 0 ? (
+            <p className="text-muted-foreground">No send attempts yet.</p>
+          ) : (
+            <ul className="space-y-1">
+              {history.data!.sends.map((h, i) => (
+                <li key={i} className="text-xs">
+                  <span
+                    className={cn(
+                      "font-semibold",
+                      h.status === "SENT" ? "text-success" : "text-destructive",
+                    )}
+                  >
+                    #{h.attemptNo} {h.status}
+                  </span>{" "}
+                  → {h.recipientEmail} · {h.createdAt}
+                  {h.errorMessage ? ` · ${h.errorMessage}` : ""}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ) : null}
+    </SectionCard>
+  );
+}
+
+/* ===================== employee salary slips =============== */
+
+function EmployeeSalarySlips() {
+  const [month, setMonth] = useState("");
+  const q = useMySalarySlips(month || undefined);
+  const rows = q.data?.rows ?? [];
+  const download = useDownloadSalarySlip();
+  return (
+    <SectionCard title="My salary slips">
+      <div className="mb-3">
+        <input
+          type="month"
+          aria-label="Month"
+          className="rounded-lg border border-border bg-card px-2 py-1.5 text-sm"
+          value={month}
+          onChange={(e) => setMonth(e.target.value)}
+        />
+      </div>
+      {q.isLoading ? (
+        <Msg>Loading…</Msg>
+      ) : q.data?.dbUnavailable ? (
+        <EmptyState
+          emoji="🗄️"
+          title="Database not connected"
+          message="Your salary slips appear once the DB is configured."
+        />
+      ) : rows.length === 0 ? (
+        <EmptyState
+          emoji="📄"
+          title="No salary slips yet"
+          message="Your salary slip will appear here once HR generates it."
+        />
+      ) : (
+        <div className="overflow-x-auto rounded-lg border border-border">
+          <table className="w-full text-sm">
+            <thead className="bg-secondary/60 text-left text-xs uppercase">
+              <tr>
+                <th className="px-3 py-2">Month</th>
+                <th className="px-3 py-2">Version</th>
+                <th className="px-3 py-2">Calculated salary</th>
+                <th className="px-3 py-2">Slip status</th>
+                <th className="px-3 py-2" />
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((s) => (
+                <tr key={s.id} className="border-t border-border/60">
+                  <td className="px-3 py-2 text-muted-foreground">
+                    {s.month}
+                    {s.isPreview ? (
+                      <span className="ml-1 rounded bg-warning/20 px-1 text-[10px] font-semibold uppercase text-warning">
+                        preview
+                      </span>
+                    ) : null}
+                  </td>
+                  <td className="px-3 py-2 text-muted-foreground">v{s.version}</td>
+                  <td className="px-3 py-2 font-semibold">{inr(s.calculatedSalary)}</td>
+                  <td
+                    className={cn(
+                      "px-3 py-2 font-semibold",
+                      SLIP_STATUS_CLASS[s.status] ?? "text-muted-foreground",
+                    )}
+                  >
+                    {s.status}
+                  </td>
+                  <td className="px-3 py-2">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="rounded-lg"
+                      disabled={download.isPending}
+                      onClick={() => download.mutate({ salarySlipId: s.id })}
+                    >
+                      Download
+                    </Button>
                   </td>
                 </tr>
               ))}

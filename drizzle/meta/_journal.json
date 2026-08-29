@@ -64,6 +64,13 @@
       "when": 1788013301826,
       "tag": "0008_payroll_salary_foundation",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "5",
+      "when": 1788014820409,
+      "tag": "0009_salary_slips_email",
+      "breakpoints": true
     }
   ]
 }

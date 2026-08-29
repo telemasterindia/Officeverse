@@ -217,6 +217,7 @@ export async function mySalaryProfile(
 /* ========================== payroll runs ======================= */
 
 export interface PayrollDTO {
+  payrollRunId?: number;
   userId?: number;
   employeeName?: string;
   month: string;
@@ -236,6 +237,7 @@ export interface PayrollDTO {
 
 function payrollDTO(r: PayrollRun, employeeName?: string): PayrollDTO {
   return {
+    payrollRunId: r.id,
     userId: r.userId,
     ...(employeeName ? { employeeName } : {}),
     month: r.periodMonth,

@@ -100,6 +100,14 @@ export async function listSalaryProfiles(
 
 /* ---------------------------- payroll_runs --------------------- */
 
+export async function getPayrollRunById(
+  id: number,
+  ex: DBX = getDb(),
+): Promise<PayrollRun | undefined> {
+  const rows = await ex.select().from(payrollRuns).where(eq(payrollRuns.id, id)).limit(1);
+  return rows[0];
+}
+
 export async function getPayrollRun(
   userId: number,
   periodMonth: string,

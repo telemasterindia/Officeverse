@@ -1161,6 +1161,110 @@ export const payrollRuns = mysqlTable(
 );
 
 /* ------------------------------------------------------------------ *
+ *  24 · salary_slips  (document layer over a payroll_run — Phase 14)  *
+ *  A PRESENTATION record: it never recalculates salary. Every value   *
+ *  is snapshotted from the APPROVED / LOCKED payroll_run at generation *
+ *  time, so the historical slip stays identical even if the payroll   *
+ *  is later reopened + recalculated (which creates a NEW version row, *
+ *  never overwriting this one). No incentive / tax / statutory field. *
+ * ------------------------------------------------------------------ */
+
+export const SALARY_SLIP_STATUSES = ["GENERATED", "SENT", "FAILED"] as const;
+
+export const salarySlips = mysqlTable(
+  "salary_slips",
+  {
+    id: bigint("id", { mode: "number", unsigned: true }).autoincrement().primaryKey(),
+    payrollRunId: bigint("payroll_run_id", { mode: "number", unsigned: true })
+      .notNull()
+      .references(() => payrollRuns.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    userId: int("user_id", { unsigned: true })
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    periodMonth: varchar("period_month", { length: 7 }).notNull(),
+    /** 1, then 2… when a reopened + recalculated payroll is regenerated */
+    version: int("version", { unsigned: true }).notNull().default(1),
+    status: mysqlEnum("status", SALARY_SLIP_STATUSES).notNull().default("GENERATED"),
+    /** a non-final slip taken from a CALCULATED payroll — clearly marked, never
+     *  the final historical document */
+    isPreview: boolean("is_preview").notNull().default(false),
+    /* ---- snapshot (authoritative payroll_run values at generation) ---- */
+    employeeName: varchar("employee_name", { length: 200 }).notNull(),
+    employeeEmail: varchar("employee_email", { length: 191 }).notNull(),
+    process: mysqlEnum("process", PROCESS_CODES).notNull(),
+    baseSalary: decimal("base_salary", { precision: 12, scale: 2 }).notNull().default("0.00"),
+    regularityBonus: int("regularity_bonus", { unsigned: true }).notNull().default(0),
+    calculatedSalary: decimal("calculated_salary", { precision: 12, scale: 2 })
+      .notNull()
+      .default("0.00"),
+    leaveCount: int("leave_count", { unsigned: true }).notNull().default(0),
+    offCount: int("off_count", { unsigned: true }).notNull().default(0),
+    payrollStatusAtGeneration: mysqlEnum(
+      "payroll_status_at_generation",
+      PAYROLL_STATUSES,
+    ).notNull(),
+    calculationVersion: varchar("calculation_version", { length: 16 }).notNull().default("v1"),
+    /* ---- document ---- */
+    fileName: varchar("file_name", { length: 255 }).notNull(),
+    /** opaque key into the storage abstraction (dev = in-memory) */
+    storageKey: varchar("storage_key", { length: 500 }).notNull(),
+    contentSha256: varchar("content_sha256", { length: 64 }).notNull(),
+    byteSize: int("byte_size", { unsigned: true }).notNull().default(0),
+    /* ---- send bookkeeping (detail lives in salary_slip_sends) ---- */
+    sendCount: int("send_count", { unsigned: true }).notNull().default(0),
+    lastSentAt: dt("last_sent_at"),
+    lastError: varchar("last_error", { length: 500 }),
+    generatedByUserId: int("generated_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    generatedAt: dt("generated_at").notNull(),
+    createdAt: dt("created_at").notNull(),
+    updatedAt: dt("updated_at").notNull(),
+  },
+  (t) => ({
+    runVersionUq: unique("salary_slips_run_version_uq").on(t.payrollRunId, t.version),
+    userMonthIdx: index("salary_slips_user_month_idx").on(t.userId, t.periodMonth),
+    monthIdx: index("salary_slips_month_idx").on(t.periodMonth),
+    statusIdx: index("salary_slips_status_idx").on(t.status),
+  }),
+);
+
+/* ------------------------------------------------------------------ *
+ *  25 · salary_slip_sends  (controlled resend history — Phase 14)     *
+ *  DOCUMENT GENERATION and EMAIL SEND are separate: one slip row, N   *
+ *  send-event rows. A send is only ever recorded after the provider   *
+ *  confirms (SENT) or rejects (FAILED) — never optimistically.        *
+ * ------------------------------------------------------------------ */
+
+export const SALARY_SLIP_SEND_STATUSES = ["SENT", "FAILED"] as const;
+
+export const salarySlipSends = mysqlTable(
+  "salary_slip_sends",
+  {
+    id: bigint("id", { mode: "number", unsigned: true }).autoincrement().primaryKey(),
+    salarySlipId: bigint("salary_slip_id", { mode: "number", unsigned: true })
+      .notNull()
+      .references(() => salarySlips.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    attemptNo: int("attempt_no", { unsigned: true }).notNull(),
+    status: mysqlEnum("status", SALARY_SLIP_SEND_STATUSES).notNull(),
+    /** server-resolved recipient (from users.email) — never client-supplied */
+    recipientEmail: varchar("recipient_email", { length: 191 }).notNull(),
+    provider: varchar("provider", { length: 40 }),
+    providerMessageId: varchar("provider_message_id", { length: 191 }),
+    errorMessage: varchar("error_message", { length: 500 }),
+    sentByUserId: int("sent_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    createdAt: dt("created_at").notNull(),
+  },
+  (t) => ({
+    slipIdx: index("salary_slip_sends_slip_idx").on(t.salarySlipId),
+  }),
+);
+
+/* ------------------------------------------------------------------ *
  *  15 · schema_meta  (one-row marker: has production been seeded?)    *
  *  Keeps demo/seed data strictly separate from production (Phase 19). *
  * ------------------------------------------------------------------ */
@@ -1304,3 +1408,7 @@ export type SalaryProfile = typeof salaryProfiles.$inferSelect;
 export type NewSalaryProfile = typeof salaryProfiles.$inferInsert;
 export type PayrollRun = typeof payrollRuns.$inferSelect;
 export type NewPayrollRun = typeof payrollRuns.$inferInsert;
+export type SalarySlip = typeof salarySlips.$inferSelect;
+export type NewSalarySlip = typeof salarySlips.$inferInsert;
+export type SalarySlipSend = typeof salarySlipSends.$inferSelect;
+export type NewSalarySlipSend = typeof salarySlipSends.$inferInsert;
