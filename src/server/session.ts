@@ -61,9 +61,19 @@ export function readSessionToken(): string | undefined {
 
 /* ------------------------------ lifecycle ------------------------------ */
 
+export interface SessionOfficeContext {
+  /** server-observed public request IP at login (already normalized) */
+  originIp?: string | null;
+  /** matched office_networks.id, or null when the login was remote */
+  officeNetworkId?: number | null;
+  /** true only for an office-network login of an attendance-tracked role */
+  attendanceEligible?: boolean;
+}
+
 export async function createSession(
   userId: number,
   meta: { ip?: string | null; userAgent?: string | null } = {},
+  office: SessionOfficeContext = {},
 ): Promise<{ token: string; expiresAt: string }> {
   const token = newToken();
   const id = hashToken(token);
@@ -80,6 +90,9 @@ export async function createSession(
       ip: meta.ip?.slice(0, 45) ?? null,
       userAgent: meta.userAgent?.slice(0, 255) ?? null,
       revokedAt: null,
+      originIp: (office.originIp ?? meta.ip ?? null)?.slice(0, 45) ?? null,
+      officeNetworkId: office.officeNetworkId ?? null,
+      attendanceEligible: office.attendanceEligible === true,
     });
   return { token, expiresAt };
 }

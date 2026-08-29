@@ -777,10 +777,57 @@ export const sessions = mysqlTable(
     ip: varchar("ip", { length: 45 }),
     userAgent: varchar("user_agent", { length: 255 }),
     revokedAt: dt("revoked_at"),
+    /* Phase 23 — office-network context, resolved SERVER-SIDE at login */
+    /** the server-observed public request IP at session creation */
+    originIp: varchar("origin_ip", { length: 45 }),
+    /** matched office_networks.id, or null when the login was remote */
+    officeNetworkId: int("office_network_id", { unsigned: true }),
+    /** true only when the login came from an authorized office network AND the
+     *  role's attendance is office-gated — the ONLY sessions attendance counts */
+    attendanceEligible: boolean("attendance_eligible").notNull().default(false),
   },
   (t) => ({
     userIdx: index("sessions_user_idx").on(t.userId),
     expiresIdx: index("sessions_expires_idx").on(t.expiresAt),
+  }),
+);
+
+/* ------------------------------------------------------------------ *
+ *  16a · office_networks  (Phase 23 — authorized office IP/CIDR)      *
+ *                                                                    *
+ *  Server-observed public request IP is matched against the ACTIVE   *
+ *  rows here to decide (a) whether an Agent may access the CRM at all *
+ *  and (b) whether a session's day counts toward attendance. Managed  *
+ *  by HR / Admin only; every change is audited. Never a single        *
+ *  hard-coded IP.                                                     *
+ * ------------------------------------------------------------------ */
+
+export const officeNetworks = mysqlTable(
+  "office_networks",
+  {
+    id: int("id", { unsigned: true }).autoincrement().primaryKey(),
+    name: varchar("name", { length: 80 }).notNull(),
+    /** IPv4/IPv6 CIDR, e.g. "203.0.113.7/32" or "198.51.100.0/24" */
+    cidr: varchar("cidr", { length: 64 }).notNull(),
+    /** null = applies to every process; otherwise scoped to one process */
+    process: mysqlEnum("process", PROCESS_CODES),
+    enabled: boolean("enabled").notNull().default(true),
+    note: varchar("note", { length: 255 }),
+    createdByUserId: int("created_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    updatedByUserId: int("updated_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    createdAt: dt("created_at").notNull(),
+    updatedAt: dt("updated_at").notNull(),
+    disabledAt: dt("disabled_at"),
+  },
+  (t) => ({
+    enabledIdx: index("office_networks_enabled_idx").on(t.enabled),
+    processIdx: index("office_networks_process_idx").on(t.process),
   }),
 );
 
@@ -1874,6 +1921,9 @@ export type ImportError = typeof importErrors.$inferSelect;
 export type NewImportError = typeof importErrors.$inferInsert;
 export type StaffPhoto = typeof staffPhotos.$inferSelect;
 export type Session = typeof sessions.$inferSelect;
+export type NewSession = typeof sessions.$inferInsert;
+export type OfficeNetwork = typeof officeNetworks.$inferSelect;
+export type NewOfficeNetwork = typeof officeNetworks.$inferInsert;
 export type Attendance = typeof attendance.$inferSelect;
 export type NewAttendance = typeof attendance.$inferInsert;
 export type LeaveRequest = typeof leaveRequests.$inferSelect;

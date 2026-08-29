@@ -23,8 +23,11 @@ describe("attendance authorization", () => {
     expect(canCorrectAttendance("closer")).toBe(false);
   });
 
-  it("every authenticated user may view their OWN attendance", () => {
-    expect(canViewOwnAttendance()).toBe(true);
+  it("Agents have NO own-attendance visibility; everyone else may see their own (Phase 23)", () => {
+    expect(canViewOwnAttendance("agent")).toBe(false);
+    expect(canViewOwnAttendance("closer")).toBe(true);
+    expect(canViewOwnAttendance("hr")).toBe(true);
+    expect(canViewOwnAttendance("admin")).toBe(true);
   });
 
   it("assert* throws HttpError(403) for a non-manager role", () => {

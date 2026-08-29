@@ -13,10 +13,17 @@ describe("attendance endpoint placement + identity", () => {
     expect(readdirSync(join(root, "server", "api")).some((f) => /attendance/i.test(f))).toBe(false);
   });
 
-  it("exactly three fns, each authenticating from the session", () => {
+  it("every fn authenticates from the session (Phase 23: + managed view + override)", () => {
     const names = [...fns.matchAll(/export const (\w+Fn)\b/g)].map((m) => m[1]).sort();
-    expect(names).toEqual(["adminAttendanceFn", "correctAttendanceFn", "myAttendanceFn"]);
-    expect((fns.match(/requireUser\(\)/g) ?? []).length).toBe(3);
+    expect(names).toEqual([
+      "adminAttendanceFn",
+      "correctAttendanceFn",
+      "managedAttendanceFn",
+      "myAttendanceFn",
+      "overrideAttendanceFn",
+    ]);
+    // one requireUser() per exported fn
+    expect((fns.match(/requireUser\(\)/g) ?? []).length).toBe(names.length);
   });
 
   it("no browser-supplied user id / role / process / shift / timestamp drives the result", () => {

@@ -18,13 +18,24 @@ import {
   type PublicUser,
 } from "../db/repos/users";
 import { createSession, revokeAllForUser, revokeSession } from "../session";
+import { listActiveNetworks } from "../db/repos/office-networks";
+import { matchOfficeNetwork, normalizeIp } from "../net/cidr";
+import { evaluateAccess } from "../net/access";
 import type { User } from "@/lib/db/schema";
 
 export type LoginResult =
-  | { ok: true; user: PublicUser; token: string; expiresAt: string }
+  | {
+      ok: true;
+      user: PublicUser;
+      token: string;
+      expiresAt: string;
+      /** office-network context resolved SERVER-SIDE from the request IP */
+      attendanceEligible: boolean;
+      officeNetworkId: number | null;
+    }
   | {
       ok: false;
-      code: "invalid_credentials" | "rate_limited" | "inactive";
+      code: "invalid_credentials" | "rate_limited" | "inactive" | "remote_denied";
       retryAfterSec?: number;
     };
 
@@ -47,11 +58,15 @@ export async function login(
   if (devAuthEnabled()) {
     const dev = devLogin(email, password);
     if (dev) {
+      // Dev Mode has no DB and therefore no office_networks — the IP gate is
+      // inert here (no bypass added; there is simply no policy to enforce).
       return {
         ok: true,
         user: toPublicUser(dev.user, null),
         token: dev.token,
         expiresAt: dev.expiresAt,
+        attendanceEligible: false,
+        officeNetworkId: null,
       };
     }
     // dev mode, no user store to consult → uniform rejection, never a 500
@@ -73,6 +88,32 @@ export async function login(
     return { ok: false, code: "inactive" };
   }
 
+  // ---- Phase 23: office-network access gate (server-observed IP only) -------
+  const originIp = normalizeIp(meta.ip);
+  const activeNetworks = await listActiveNetworks();
+  const matched = originIp
+    ? matchOfficeNetwork(
+        originIp,
+        activeNetworks.map((n) => ({
+          id: n.id,
+          name: n.name,
+          cidr: n.cidr,
+          process: n.process ?? null,
+          enabled: n.enabled,
+        })),
+        user.process,
+      )
+    : null;
+  const access = evaluateAccess({
+    role: user.role,
+    officeMatch: matched != null,
+    policyConfigured: activeNetworks.length > 0,
+  });
+  if (!access.crmAllowed) {
+    // no rate-count bump — the credentials were valid; the network was not
+    return { ok: false, code: "remote_denied" };
+  }
+
   clearLoginRate(rateKey);
 
   if (await needsRehash(user.passwordHash)) {
@@ -84,7 +125,11 @@ export async function login(
   }
 
   await touchLogin(user.id);
-  const { token, expiresAt } = await createSession(user.id, meta);
+  const { token, expiresAt } = await createSession(user.id, meta, {
+    originIp,
+    officeNetworkId: matched?.id ?? null,
+    attendanceEligible: access.attendanceEligible,
+  });
   const photoUrl = await getUserPhotoUrl(user);
 
   await recordAudit({
@@ -97,7 +142,14 @@ export async function login(
     userAgent: meta.userAgent ?? null,
   });
 
-  return { ok: true, user: toPublicUser(user, photoUrl), token, expiresAt };
+  return {
+    ok: true,
+    user: toPublicUser(user, photoUrl),
+    token,
+    expiresAt,
+    attendanceEligible: access.attendanceEligible,
+    officeNetworkId: matched?.id ?? null,
+  };
 }
 
 export async function logout(token: string | undefined, actor?: User): Promise<void> {

@@ -55,7 +55,16 @@ export const myAttendanceFn = createServerFn({ method: "GET" })
   .inputValidator((d: unknown) => rangeInput.parse(d ?? {}))
   .handler(async ({ data }): Promise<svc.MyAttendanceResult> => {
     const user = await requireUser();
+    // service throws 403 for Agents (no attendance visibility at all)
     return svc.listMyAttendance(user, data);
+  });
+
+/** Manager view — Closer (own process agents only) / HR / Admin. */
+export const managedAttendanceFn = createServerFn({ method: "GET" })
+  .inputValidator((d: unknown) => adminFilters.parse(d ?? {}))
+  .handler(async ({ data }): Promise<svc.AdminAttendanceResult> => {
+    const user = await requireUser();
+    return svc.listManagedAttendance(user, data);
   });
 
 export const adminAttendanceFn = createServerFn({ method: "GET" })
@@ -70,4 +79,24 @@ export const correctAttendanceFn = createServerFn({ method: "POST" })
   .handler(async ({ data }): Promise<{ ok: true }> => {
     const user = await requireUser();
     return svc.correctAttendance(user, data.id, data.patch, data.reason, requestInfo());
+  });
+
+/** HR / Admin classification override: NORMAL | SHORT_LATE | LATE + reason. */
+export const overrideAttendanceFn = createServerFn({ method: "POST" })
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        id: z.coerce.number().int().positive(),
+        newClass: z.enum(["NORMAL", "SHORT_LATE", "LATE"]),
+        reason: z.string().trim().min(3).max(500),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return svc.overrideAttendanceClass(
+      user,
+      { id: data.id, newClass: data.newClass, reason: data.reason },
+      requestInfo(),
+    );
   });

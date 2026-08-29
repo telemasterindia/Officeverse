@@ -26,6 +26,7 @@ import { Route as ShellLeaveRouteImport } from './routes/_shell.leave'
 import { Route as ShellLiveRouteImport } from './routes/_shell.live'
 import { Route as ShellMissionControlRouteImport } from './routes/_shell.mission-control'
 import { Route as ShellNotificationsRouteImport } from './routes/_shell.notifications'
+import { Route as ShellOfficeNetworksRouteImport } from './routes/_shell.office-networks'
 import { Route as ShellPayrollRouteImport } from './routes/_shell.payroll'
 import { Route as ShellPeopleRouteImport } from './routes/_shell.people'
 import { Route as ShellPresenceRouteImport } from './routes/_shell.presence'
@@ -128,6 +129,11 @@ const ShellMissionControlRoute = ShellMissionControlRouteImport.update({
 const ShellNotificationsRoute = ShellNotificationsRouteImport.update({
   id: '/notifications',
   path: '/notifications',
+  getParentRoute: () => ShellRoute,
+} as any)
+const ShellOfficeNetworksRoute = ShellOfficeNetworksRouteImport.update({
+  id: '/office-networks',
+  path: '/office-networks',
   getParentRoute: () => ShellRoute,
 } as any)
 const ShellPayrollRoute = ShellPayrollRouteImport.update({
@@ -244,6 +250,7 @@ export interface FileRoutesByFullPath {
   '/live': typeof ShellLiveRoute
   '/mission-control': typeof ShellMissionControlRoute
   '/notifications': typeof ShellNotificationsRoute
+  '/office-networks': typeof ShellOfficeNetworksRoute
   '/payroll': typeof ShellPayrollRoute
   '/people': typeof ShellPeopleRoute
   '/presence': typeof ShellPresenceRoute
@@ -281,6 +288,7 @@ export interface FileRoutesByTo {
   '/live': typeof ShellLiveRoute
   '/mission-control': typeof ShellMissionControlRoute
   '/notifications': typeof ShellNotificationsRoute
+  '/office-networks': typeof ShellOfficeNetworksRoute
   '/payroll': typeof ShellPayrollRoute
   '/people': typeof ShellPeopleRoute
   '/presence': typeof ShellPresenceRoute
@@ -320,6 +328,7 @@ export interface FileRoutesById {
   '/_shell/live': typeof ShellLiveRoute
   '/_shell/mission-control': typeof ShellMissionControlRoute
   '/_shell/notifications': typeof ShellNotificationsRoute
+  '/_shell/office-networks': typeof ShellOfficeNetworksRoute
   '/_shell/payroll': typeof ShellPayrollRoute
   '/_shell/people': typeof ShellPeopleRoute
   '/_shell/presence': typeof ShellPresenceRoute
@@ -359,6 +368,7 @@ export interface FileRouteTypes {
     | '/live'
     | '/mission-control'
     | '/notifications'
+    | '/office-networks'
     | '/payroll'
     | '/people'
     | '/presence'
@@ -396,6 +406,7 @@ export interface FileRouteTypes {
     | '/live'
     | '/mission-control'
     | '/notifications'
+    | '/office-networks'
     | '/payroll'
     | '/people'
     | '/presence'
@@ -434,6 +445,7 @@ export interface FileRouteTypes {
     | '/_shell/live'
     | '/_shell/mission-control'
     | '/_shell/notifications'
+    | '/_shell/office-networks'
     | '/_shell/payroll'
     | '/_shell/people'
     | '/_shell/presence'
@@ -580,6 +592,13 @@ declare module '@tanstack/react-router' {
       path: '/notifications'
       fullPath: '/notifications'
       preLoaderRoute: typeof ShellNotificationsRouteImport
+      parentRoute: typeof ShellRoute
+    }
+    '/_shell/office-networks': {
+      id: '/_shell/office-networks'
+      path: '/office-networks'
+      fullPath: '/office-networks'
+      preLoaderRoute: typeof ShellOfficeNetworksRouteImport
       parentRoute: typeof ShellRoute
     }
     '/_shell/payroll': {
@@ -733,6 +752,7 @@ interface ShellRouteChildren {
   ShellLiveRoute: typeof ShellLiveRoute
   ShellMissionControlRoute: typeof ShellMissionControlRoute
   ShellNotificationsRoute: typeof ShellNotificationsRoute
+  ShellOfficeNetworksRoute: typeof ShellOfficeNetworksRoute
   ShellPayrollRoute: typeof ShellPayrollRoute
   ShellPeopleRoute: typeof ShellPeopleRoute
   ShellPresenceRoute: typeof ShellPresenceRoute
@@ -769,6 +789,7 @@ const ShellRouteChildren: ShellRouteChildren = {
   ShellLiveRoute: ShellLiveRoute,
   ShellMissionControlRoute: ShellMissionControlRoute,
   ShellNotificationsRoute: ShellNotificationsRoute,
+  ShellOfficeNetworksRoute: ShellOfficeNetworksRoute,
   ShellPayrollRoute: ShellPayrollRoute,
   ShellPeopleRoute: ShellPeopleRoute,
   ShellPresenceRoute: ShellPresenceRoute,

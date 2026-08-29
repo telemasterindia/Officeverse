@@ -7,6 +7,7 @@ import { EmptyState, PageHeader, SectionCard } from "@/components/officeverse/pr
 import {
   useAdminAttendance,
   useCorrectAttendance,
+  useManagedAttendance,
   useMyAttendance,
   type AdminAttendanceFilters,
 } from "@/lib/officeverse/use-attendance";
@@ -52,16 +53,108 @@ type AttendanceRow = NonNullable<ReturnType<typeof useMyAttendance>["data"]>["ro
 function AttendancePage() {
   const { user } = useSession();
   const isManager = user?.role === "admin" || user?.role === "hr";
+  const isCloser = user?.role === "closer";
+
+  // Agents have NO attendance visibility at all (intentional business design).
+  if (user?.role === "agent") {
+    return (
+      <div className="space-y-6">
+        <PageHeader
+          title="Attendance"
+          description="Recorded automatically from your office sign-in."
+        />
+        <EmptyState
+          emoji="🔒"
+          title="Not shown for your role"
+          message="Attendance is recorded automatically when you sign in from an authorized office network. There is nothing to mark and no history to review here."
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Attendance"
-        description="Server-derived from your authenticated sessions. US: on-time ≤ 8:50 PM · short 8:51–9:49 PM · late ≥ 9:50 PM. India classification is pending business clarification."
+        description="Recorded automatically from authenticated office-network sessions — no manual check-in. US: NORMAL before 9:00 PM · SHORT LATE 9:00–9:10 PM · LATE after 9:10 PM. India: NORMAL before 9:40 AM · SHORT LATE 9:40–9:50 AM · LATE after 9:50 AM."
       />
       <MySection />
+      {isCloser ? <ManagedSection /> : null}
       {isManager ? <AdminSection /> : null}
     </div>
+  );
+}
+
+/* ------------------------- closer: managed agents ------------------- */
+
+function ManagedSection() {
+  const [filters, setFilters] = useState<AdminAttendanceFilters>({});
+  const q = useManagedAttendance(filters);
+  const rows = q.data?.rows ?? [];
+  return (
+    <SectionCard
+      title="Team attendance"
+      description="Agents in your process — operational view only (no compensation)."
+    >
+      <div className="mb-3 flex flex-wrap gap-2">
+        <input
+          className="rounded-lg border border-border bg-card px-2 py-1.5 text-sm"
+          placeholder="Agent name / email"
+          onChange={(e) => {
+            const v = e.target.value.trim();
+            setFilters((f) => {
+              const next = { ...f };
+              if (v) next.employee = v;
+              else delete next.employee;
+              return next;
+            });
+          }}
+        />
+      </div>
+      {q.isLoading ? (
+        <p className="text-sm text-muted-foreground">Loading…</p>
+      ) : q.data?.dbUnavailable ? (
+        <EmptyState
+          emoji="🗄️"
+          title="Database not connected"
+          message="Team attendance needs the database."
+        />
+      ) : rows.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No agent attendance in your process yet.</p>
+      ) : (
+        <div className="overflow-x-auto rounded-lg border border-border">
+          <table className="w-full text-sm">
+            <thead className="bg-secondary/60 text-left text-xs uppercase">
+              <tr>
+                <th className="px-3 py-2">Agent</th>
+                <th className="px-3 py-2">Date</th>
+                <th className="px-3 py-2">Check-in</th>
+                <th className="px-3 py-2">Check-out</th>
+                <th className="px-3 py-2">Classification</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.id} className="border-t border-border/60">
+                  <td className="px-3 py-2">{r.employeeName}</td>
+                  <td className="px-3 py-2 text-muted-foreground">{r.operationalDate}</td>
+                  <td className="px-3 py-2 text-muted-foreground">{fmtTime(r.firstCheckInAt)}</td>
+                  <td className="px-3 py-2 text-muted-foreground">{fmtTime(r.lastCheckOutAt)}</td>
+                  <td className={cn("px-3 py-2 font-semibold", STATUS_CLASS[r.status])}>
+                    {r.lateClass}
+                    {r.corrected ? (
+                      <span className="ml-1 text-[10px] uppercase text-muted-foreground">
+                        (adjusted)
+                      </span>
+                    ) : null}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </SectionCard>
   );
 }
 

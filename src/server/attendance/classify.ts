@@ -1,34 +1,57 @@
 /**
- * Officeverse — attendance classification (Phase 10). PURE. No DB.
+ * Officeverse — attendance classification (Phase 10 · rules updated in Phase 23).
+ * PURE. No DB. No timezone engine of its own — it reuses the canonical
+ * `shiftWindow()` + `istWallClockToEpochMs()`.
  *
- * FROZEN BUSINESS RULES — US SHIFT (21:00–06:00 IST):
- *   Reporting time            20:50 IST
- *   check-in ≤ 20:50          ON TIME            (early check-in is NOT late)
- *   20:51 – 21:49             SHORT ATTENDANCE
- *   ≥ 21:50                   LATE
- *   Shift end                 06:00 IST
- *   check-out ≥ 06:00         ON TIME
- *   < 1h before end (05:00–)  SHORT ATTENDANCE
- *   ≥ 1h before end (< 05:00) EARLY DEPARTURE  (grouped with the "late category")
+ * ============================ BUSINESS RULES ============================
+ * Employee-facing operational classification: NORMAL · SHORT LATE · LATE
+ * ("Short Late" = a MINOR late arrival — NOT "Short Leave", NOT an HR Leave.)
  *
- * INDIA SHIFT (09:30–18:30 IST): no reporting time is defined — status stays
- * PENDING (business clarification required). Raw minute facts are still
- * recorded (minutes after shift start / before shift end).
+ * US SHIFT (21:00–06:00 IST), reporting 20:50:
+ *   check-in  < 21:00            → NORMAL      (early check-in is never late)
+ *   check-in  21:00 .. 21:10     → SHORT LATE  (10-minute window)
+ *   check-in  ≥ 21:11            → LATE
+ *   e.g. 20:59 NORMAL · 21:00 SHORT LATE · 21:10 SHORT LATE · 21:11 LATE
  *
- * NOT implemented here (deferred to the HR phase): 2 late = 1 off,
- * 3 short = 1 off, leave, sandwich, holidays, regularity bonus, salary,
- * incentives, absence processing.
+ * INDIA SHIFT (09:30–18:30 IST), reporting 09:30:
+ *   check-in  < 09:40            → NORMAL
+ *   check-in  09:40 .. 09:50     → SHORT LATE  (10-minute window)
+ *   check-in  ≥ 09:51            → LATE
+ *   e.g. 09:39 NORMAL · 09:40 SHORT LATE · 09:50 SHORT LATE · 09:51 LATE
+ *
+ * The SHORT LATE window is MAXIMUM 10 MINUTES for both processes.
+ *
+ * Check-out / early-departure rules are UNCHANGED from Phase 10 (US only):
+ *   check-out ≥ 06:00           → ON TIME
+ *   < 1h before shift end       → SHORT ATTENDANCE
+ *   ≥ 1h before shift end       → EARLY DEPARTURE
+ *
+ * NOT here (HR phases): 2 late = 1 off, 3 short-late = 1 off, leave, sandwich,
+ * holidays, regularity bonus, salary, incentives, absence processing.
  */
 import { shiftWindow } from "@/lib/officeverse/shift";
 import type { ProcessCode } from "@/lib/officeverse/types";
 import { addDaysYMD, istWallClockToEpochMs } from "../time";
 
-/** US reporting time — the on-time cutoff (minutes since midnight IST) */
+/**
+ * Per-process late rules. `reportingHHMM` is displayed on the attendance row;
+ * classification is anchored on the two cut-offs. A process without an entry
+ * here (UK / AU) stays PENDING — no rule is invented.
+ */
+export const LATE_RULES: Partial<
+  Record<ProcessCode, { reportingHHMM: string; shortLateFromHHMM: string; lateFromHHMM: string }>
+> = {
+  US: { reportingHHMM: "20:50", shortLateFromHHMM: "21:00", lateFromHHMM: "21:11" },
+  IN: { reportingHHMM: "09:30", shortLateFromHHMM: "09:40", lateFromHHMM: "09:51" },
+};
+
+/** kept for backwards compatibility with existing imports */
 export const US_REPORTING_HHMM = "20:50";
-/** US late cutoff — at/after this, the check-in is LATE not SHORT */
-export const US_LATE_HHMM = "21:50";
+export const US_LATE_HHMM = "21:11";
 /** early logout of this many minutes or more before shift end → EARLY DEPARTURE */
 export const EARLY_DEPARTURE_GRACE_MIN = 60;
+
+export type LateClass = "NORMAL" | "SHORT_LATE" | "LATE" | "PENDING";
 
 export type CheckInStatus = "ON_TIME" | "SHORT" | "LATE" | "PENDING";
 export type CheckOutStatus = "ON_TIME" | "SHORT" | "EARLY_DEPARTURE" | "PENDING";
@@ -54,26 +77,49 @@ export interface AttendanceClassification {
   checkOutStatus: CheckOutStatus;
   status: AttendanceStatus;
   shortAttendance: boolean;
-  /** true when the process has no frozen reporting-time rules (India, etc.) */
+  /** business-facing check-in classification */
+  lateClass: LateClass;
+  /** true when the process has no frozen reporting-time rules (UK / AU) */
   classificationPending: boolean;
 }
 
 const wall = (ymd: string, hhmm: string): string => `${ymd} ${hhmm}:00`;
 const diffMin = (aMs: number, bMs: number): number => Math.round((aMs - bMs) / 60_000);
 
+/** Pure helper — the exact NORMAL / SHORT LATE / LATE decision for one check-in. */
+export function classifyLate(
+  process: ProcessCode,
+  operationalDate: string,
+  firstCheckInAt: string | null | undefined,
+): LateClass {
+  const rule = LATE_RULES[process];
+  if (!rule) return "PENDING";
+  if (!firstCheckInAt) return "PENDING";
+  const inMs = istWallClockToEpochMs(firstCheckInAt);
+  const shortFromMs = istWallClockToEpochMs(wall(operationalDate, rule.shortLateFromHHMM));
+  const lateFromMs = istWallClockToEpochMs(wall(operationalDate, rule.lateFromHHMM));
+  if (inMs < shortFromMs) return "NORMAL";
+  if (inMs < lateFromMs) return "SHORT_LATE";
+  return "LATE";
+}
+
+const CHECKIN_FROM_LATE: Record<Exclude<LateClass, "PENDING">, CheckInStatus> = {
+  NORMAL: "ON_TIME",
+  SHORT_LATE: "SHORT",
+  LATE: "LATE",
+};
+
 export function classifyAttendance(input: ClassifyInput): AttendanceClassification {
   const { process, operationalDate: d } = input;
   const w = shiftWindow(process);
-  const isUS = process === "US";
+  const rule = LATE_RULES[process];
 
   const shiftStartAt = wall(d, w.start);
   const shiftEndAt = wall(w.overnight ? addDaysYMD(d, 1) : d, w.end);
-  const reportingAt = isUS ? wall(d, US_REPORTING_HHMM) : shiftStartAt;
+  const reportingAt = rule ? wall(d, rule.reportingHHMM) : shiftStartAt;
 
-  const startMs = istWallClockToEpochMs(shiftStartAt);
   const endMs = istWallClockToEpochMs(shiftEndAt);
   const reportMs = istWallClockToEpochMs(reportingAt);
-  const usLateMs = isUS ? istWallClockToEpochMs(wall(d, US_LATE_HHMM)) : reportMs;
 
   const inMs = input.firstCheckInAt ? istWallClockToEpochMs(input.firstCheckInAt) : null;
   const outMs = input.lastCheckOutAt ? istWallClockToEpochMs(input.lastCheckOutAt) : null;
@@ -82,29 +128,25 @@ export function classifyAttendance(input: ClassifyInput): AttendanceClassificati
   const lateMinutes = inMs == null ? 0 : Math.max(0, diffMin(inMs, reportMs));
   const earlyDepartureMinutes = outMs == null ? 0 : Math.max(0, diffMin(endMs, outMs));
 
-  let checkInStatus: CheckInStatus = "PENDING";
-  let checkOutStatus: CheckOutStatus = "PENDING";
+  const lateClass = classifyLate(process, d, input.firstCheckInAt);
 
-  if (isUS) {
-    if (inMs != null) {
-      // ≤ 20:50 ON TIME · 20:51–21:49 SHORT · ≥ 21:50 LATE (early check-in is not late)
-      checkInStatus = inMs <= reportMs ? "ON_TIME" : inMs < usLateMs ? "SHORT" : "LATE";
-    }
-    if (outMs != null) {
-      // ≥ 06:00 ON TIME · <1h early SHORT · ≥1h early EARLY DEPARTURE
-      checkOutStatus =
-        earlyDepartureMinutes <= 0
-          ? "ON_TIME"
-          : earlyDepartureMinutes < EARLY_DEPARTURE_GRACE_MIN
-            ? "SHORT"
-            : "EARLY_DEPARTURE";
-    }
+  let checkInStatus: CheckInStatus = "PENDING";
+  if (lateClass !== "PENDING") checkInStatus = CHECKIN_FROM_LATE[lateClass];
+
+  let checkOutStatus: CheckOutStatus = "PENDING";
+  if (rule && outMs != null) {
+    checkOutStatus =
+      earlyDepartureMinutes <= 0
+        ? "ON_TIME"
+        : earlyDepartureMinutes < EARLY_DEPARTURE_GRACE_MIN
+          ? "SHORT"
+          : "EARLY_DEPARTURE";
   }
 
   // Overall status = the most severe of the two ends. A still-open check-out
   // (PENDING) is not yet a problem; the row is recomputed on the next activity.
   let status: AttendanceStatus;
-  if (!isUS || (inMs == null && outMs == null)) {
+  if (!rule || (inMs == null && outMs == null)) {
     status = "PENDING";
   } else if (checkInStatus === "LATE") {
     status = "LATE";
@@ -128,6 +170,7 @@ export function classifyAttendance(input: ClassifyInput): AttendanceClassificati
     checkOutStatus,
     status,
     shortAttendance: status === "SHORT_ATTENDANCE",
-    classificationPending: !isUS,
+    lateClass,
+    classificationPending: !rule,
   };
 }

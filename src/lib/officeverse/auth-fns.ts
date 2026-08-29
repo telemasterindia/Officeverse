@@ -43,6 +43,14 @@ export const loginFn = createServerFn({ method: "POST" })
       if (res.code === "inactive") {
         throw new HttpError(403, "This account is not active.", "inactive");
       }
+      if (res.code === "remote_denied") {
+        // generic — never reveals office IP addresses
+        throw new HttpError(
+          403,
+          "You can only sign in from an authorized office network.",
+          "remote_denied",
+        );
+      }
       throw new HttpError(401, "Invalid email or password.", "invalid_credentials");
     }
     setSessionCookie(res.token, res.expiresAt);

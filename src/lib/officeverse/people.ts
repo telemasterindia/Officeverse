@@ -74,7 +74,9 @@ function seed(): PersonRecord[] {
         phone: "",
         dob: "",
         registered_on: e.joining_date,
-        monthly_salary: kind === "agent" ? 45000 : 65000,
+        // Phase 23 §15 — Closer compensation is NEVER part of the Closer
+        // employee-management model. Only the agent base-salary config exists.
+        monthly_salary: kind === "agent" ? 45000 : 0,
         status: e.status === "On Leave" ? "On Leave" : "Active",
         process: e.process,
         password: "",
