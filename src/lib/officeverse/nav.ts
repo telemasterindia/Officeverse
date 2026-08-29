@@ -1,0 +1,146 @@
+import {
+  Activity,
+  BadgeCheck,
+  Bell,
+  CalendarCheck,
+  ClipboardList,
+  Download,
+  FileBarChart,
+  Gauge,
+  LayoutDashboard,
+  ListChecks,
+  Palette,
+  Plane,
+  Settings,
+  ShieldCheck,
+  Target,
+  UserCircle,
+  UserPlus,
+  Users,
+  Users2,
+} from "lucide-react";
+import type { Role } from "./types";
+
+export interface NavItem {
+  label: string;
+  to: string;
+  icon: typeof Gauge;
+  exact?: boolean;
+}
+
+export const NAV_BY_ROLE: Record<Role, { group: string; items: NavItem[] }[]> = {
+  agent: [
+    {
+      group: "Workspace",
+      items: [
+        { label: "My Workspace", to: "/workspace", icon: LayoutDashboard },
+        { label: "New Lead", to: "/leads/new", icon: Target },
+        { label: "My Leads", to: "/leads", icon: ClipboardList, exact: true },
+        { label: "Follow-ups", to: "/followups", icon: ListChecks },
+      ],
+    },
+    {
+      group: "You",
+      items: [
+        { label: "Avatar Studio", to: "/avatar-studio", icon: Palette },
+        { label: "Notifications", to: "/notifications", icon: Bell },
+        { label: "Profile", to: "/profile", icon: UserCircle },
+      ],
+    },
+  ],
+  closer: [
+    {
+      group: "Pipeline",
+      items: [
+        { label: "Closer Hub", to: "/closer-hub", icon: Gauge },
+        { label: "My Leads", to: "/leads", icon: ClipboardList, exact: true },
+        { label: "My Follow-ups", to: "/followups", icon: ListChecks },
+        { label: "Team", to: "/team", icon: Users2 },
+      ],
+    },
+    {
+      group: "You",
+      items: [
+        { label: "Avatar Studio", to: "/avatar-studio", icon: Palette },
+        { label: "Notifications", to: "/notifications", icon: Bell },
+        { label: "Profile", to: "/profile", icon: UserCircle },
+      ],
+    },
+  ],
+  hr: [
+    {
+      group: "People",
+      items: [
+        { label: "People Hub", to: "/people", icon: Users },
+        { label: "Employees", to: "/employees", icon: BadgeCheck },
+        { label: "Attendance", to: "/attendance", icon: CalendarCheck },
+        { label: "Leave", to: "/leave", icon: Plane },
+        { label: "Reports", to: "/reports", icon: FileBarChart },
+      ],
+    },
+    {
+      group: "You",
+      items: [
+        { label: "Avatar Studio", to: "/avatar-studio", icon: Palette },
+        { label: "Profile", to: "/profile", icon: UserCircle },
+      ],
+    },
+  ],
+  admin: [
+    {
+      group: "Command",
+      items: [
+        { label: "Mission Control", to: "/mission-control", icon: Gauge },
+        { label: "Leads", to: "/leads", icon: ClipboardList, exact: true },
+        { label: "Follow-ups", to: "/followups", icon: ListChecks },
+        { label: "Assignments", to: "/assignments", icon: Target },
+      ],
+    },
+    {
+      group: "Agents",
+      items: [
+        { label: "Create Agent", to: "/agents/new", icon: UserPlus },
+        { label: "Agent List", to: "/agents", icon: Users2, exact: true },
+      ],
+    },
+    {
+      group: "Closers",
+      items: [
+        { label: "Create Closer", to: "/closers/new", icon: UserPlus },
+        { label: "Closer List", to: "/closers", icon: BadgeCheck, exact: true },
+      ],
+    },
+    {
+      group: "Clients",
+      items: [
+        { label: "Create Client", to: "/clients/new", icon: UserPlus },
+        { label: "Client List", to: "/clients", icon: Users, exact: true },
+      ],
+    },
+    {
+      group: "Teams",
+      items: [{ label: "HR", to: "/people", icon: Users }],
+    },
+    {
+      group: "Insights",
+      items: [
+        { label: "Reports", to: "/reports", icon: FileBarChart },
+        { label: "Exports", to: "/exports", icon: Download },
+        { label: "Audit", to: "/audit", icon: ShieldCheck },
+        { label: "Activity", to: "/notifications", icon: Activity },
+        { label: "Settings", to: "/settings", icon: Settings },
+      ],
+    },
+    {
+      group: "You",
+      items: [{ label: "Avatar Studio", to: "/avatar-studio", icon: Palette }],
+    },
+  ],
+};
+
+export const HOME_BY_ROLE: Record<Role, string> = {
+  agent: "/workspace",
+  closer: "/closer-hub",
+  hr: "/people",
+  admin: "/mission-control",
+};
