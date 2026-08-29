@@ -17,7 +17,10 @@
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
-    "db:check": "drizzle-kit check"
+    "db:check": "drizzle-kit check",
+    "build:node": "NITRO_PRESET=node-server vite build",
+    "check:db": "node scripts/check-db.mjs",
+    "start:node": "node .output/server/index.mjs"
   },
   "overrides": {
     "rolldown": "1.2.1"

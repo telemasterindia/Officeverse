@@ -1,19 +1,27 @@
 /**
  * Officeverse — plain HTTP endpoints that are NOT server functions.
  *
- *   GET  /api/health          → liveness + config presence (no secrets)
- *   POST /internal/tick       → scheduler pass          (CRON_SECRET)
- *   POST /internal/drain-email→ email worker pass       (CRON_SECRET)
+ *   GET  /api/health                    → liveness + readiness status (no secrets)
+ *   GET  /api/health?deep=1             → + live DB / migration check (cron secret)
+ *   POST /internal/monthly-salary-slips → monthly salary-slip delivery batch
+ *                                         (cron secret; dryRun=true by default)
+ *   POST /internal/tick                 → reminder scheduler pass   (not built yet)
+ *   POST /internal/drain-email          → email-job outbox drain    (not built yet)
  *
- * cPanel cron calls the /internal/* routes with:
- *   curl -fsS -X POST -H "x-cron-secret: $CRON_SECRET" https://APP/internal/tick
+ * cPanel / GoDaddy cron calls the /internal/* routes with a shared secret:
+ *   curl -fsS -X POST -H "x-cron-secret: $CRON_SECRET" \
+ *     "https://APP/internal/monthly-salary-slips?month=2026-08&run=1"
  *
- * `handleInternal` returns a Response for these paths, or `null` to let the
- * request fall through to the normal SSR handler.
+ * The secret is compared in constant time. There is NO unauthenticated trigger.
+ * `handleInternal` returns a Response for these paths, or `null` to fall through
+ * to the normal SSR handler.
  */
 import { env } from "./env";
 import { safeEqual } from "./session";
 import { nowIST } from "./time";
+import { collectHealth, publicLiveness } from "./health";
+import { processMonthlySalarySlips } from "./hr/salary-slip-batch";
+import { previousPayrollMonthIST } from "./hr/salary-slip-cron";
 import { isDbConfigured } from "@/lib/db";
 
 function json(body: unknown, status = 200): Response {
@@ -23,8 +31,10 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
+/** Accepts the Phase-4/6 `CRON_SECRET` or the Phase-15 `OFFICEVERSE_CRON_SECRET`
+ *  (set them to the same value in production). */
 function cronAuthorized(request: Request): boolean {
-  const secret = env("CRON_SECRET");
+  const secret = env("CRON_SECRET") ?? env("OFFICEVERSE_CRON_SECRET");
   if (!secret) return false;
   const provided =
     request.headers.get("x-cron-secret") ??
@@ -39,25 +49,56 @@ export async function handleInternal(request: Request): Promise<Response | null>
   const path = url.pathname.replace(/\/+$/, "") || "/";
 
   if (path === "/api/health") {
-    return json({
-      ok: true,
-      service: "officeverse",
-      time: nowIST(),
-      db: isDbConfigured() ? "configured" : "not-configured",
-    });
+    const deep = url.searchParams.get("deep") === "1";
+    if (deep && !cronAuthorized(request)) return json({ error: "unauthorized" }, 401);
+    try {
+      const report = await collectHealth({ deep });
+      return json(deep ? report : publicLiveness(report));
+    } catch {
+      return json({ ok: false, service: "officeverse", time: nowIST(), database: "error" }, 503);
+    }
+  }
+
+  if (path === "/internal/monthly-salary-slips") {
+    if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+    if (!cronAuthorized(request)) return json({ error: "unauthorized" }, 401);
+    if (!isDbConfigured()) return json({ error: "db_unavailable" }, 503);
+
+    const monthParam = url.searchParams.get("month");
+    const month =
+      monthParam && /^\d{4}-\d{2}$/.test(monthParam) ? monthParam : previousPayrollMonthIST();
+    // SAFE BY DEFAULT: a preview unless the caller explicitly opts in with run=1
+    const dryRun = url.searchParams.get("run") !== "1";
+
+    try {
+      const summary = await processMonthlySalarySlips(
+        { id: null, role: "system" },
+        { month, dryRun },
+        { source: "internal_http_cron" },
+      );
+      return json({ ok: true, dryRun, summary });
+    } catch (err) {
+      return json(
+        {
+          ok: false,
+          error: "batch_failed",
+          message: err instanceof Error ? err.message.slice(0, 200) : "unknown",
+        },
+        502,
+      );
+    }
   }
 
   if (path === "/internal/tick" || path === "/internal/drain-email") {
     if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
     if (!cronAuthorized(request)) return json({ error: "unauthorized" }, 401);
-
-    // Real implementations land in Phase 15 (scheduler) and Phase 16 (email worker).
+    // The reminder scheduler + email-job outbox drain are not implemented yet.
     return json(
       {
         ok: false,
         endpoint: path,
         status: "not_implemented",
-        note: "Scheduler / email worker are implemented in a later phase.",
+        note: "Only /internal/monthly-salary-slips is wired. Reminder scheduler + email-job drain are future phases.",
       },
       501,
     );
