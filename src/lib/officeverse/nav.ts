@@ -14,6 +14,7 @@ import {
   Settings,
   ShieldCheck,
   Target,
+  Upload,
   UserCircle,
   UserPlus,
   Users,
@@ -37,6 +38,7 @@ export const NAV_BY_ROLE: Record<Role, { group: string; items: NavItem[] }[]> = 
         { label: "New Lead", to: "/leads/new", icon: Target },
         { label: "My Leads", to: "/leads", icon: ClipboardList, exact: true },
         { label: "Follow-ups", to: "/followups", icon: ListChecks },
+        { label: "Bulk Import", to: "/imports", icon: Upload },
       ],
     },
     {
@@ -125,6 +127,7 @@ export const NAV_BY_ROLE: Record<Role, { group: string; items: NavItem[] }[]> = 
       group: "Insights",
       items: [
         { label: "Reports", to: "/reports", icon: FileBarChart },
+        { label: "Bulk Import", to: "/imports", icon: Upload },
         { label: "Exports", to: "/exports", icon: Download },
         { label: "Audit", to: "/audit", icon: ShieldCheck },
         { label: "Activity", to: "/notifications", icon: Activity },

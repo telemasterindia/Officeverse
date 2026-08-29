@@ -18,6 +18,7 @@ import { Route as ShellAvatarStudioRouteImport } from './routes/_shell.avatar-st
 import { Route as ShellCloserHubRouteImport } from './routes/_shell.closer-hub'
 import { Route as ShellEmployeesRouteImport } from './routes/_shell.employees'
 import { Route as ShellExportsRouteImport } from './routes/_shell.exports'
+import { Route as ShellImportsRouteImport } from './routes/_shell.imports'
 import { Route as ShellLeaveRouteImport } from './routes/_shell.leave'
 import { Route as ShellMissionControlRouteImport } from './routes/_shell.mission-control'
 import { Route as ShellNotificationsRouteImport } from './routes/_shell.notifications'
@@ -81,6 +82,11 @@ const ShellEmployeesRoute = ShellEmployeesRouteImport.update({
 const ShellExportsRoute = ShellExportsRouteImport.update({
   id: '/exports',
   path: '/exports',
+  getParentRoute: () => ShellRoute,
+} as any)
+const ShellImportsRoute = ShellImportsRouteImport.update({
+  id: '/imports',
+  path: '/imports',
   getParentRoute: () => ShellRoute,
 } as any)
 const ShellLeaveRoute = ShellLeaveRouteImport.update({
@@ -194,6 +200,7 @@ export interface FileRoutesByFullPath {
   '/closer-hub': typeof ShellCloserHubRoute
   '/employees': typeof ShellEmployeesRoute
   '/exports': typeof ShellExportsRoute
+  '/imports': typeof ShellImportsRoute
   '/leave': typeof ShellLeaveRoute
   '/mission-control': typeof ShellMissionControlRoute
   '/notifications': typeof ShellNotificationsRoute
@@ -224,6 +231,7 @@ export interface FileRoutesByTo {
   '/closer-hub': typeof ShellCloserHubRoute
   '/employees': typeof ShellEmployeesRoute
   '/exports': typeof ShellExportsRoute
+  '/imports': typeof ShellImportsRoute
   '/leave': typeof ShellLeaveRoute
   '/mission-control': typeof ShellMissionControlRoute
   '/notifications': typeof ShellNotificationsRoute
@@ -256,6 +264,7 @@ export interface FileRoutesById {
   '/_shell/closer-hub': typeof ShellCloserHubRoute
   '/_shell/employees': typeof ShellEmployeesRoute
   '/_shell/exports': typeof ShellExportsRoute
+  '/_shell/imports': typeof ShellImportsRoute
   '/_shell/leave': typeof ShellLeaveRoute
   '/_shell/mission-control': typeof ShellMissionControlRoute
   '/_shell/notifications': typeof ShellNotificationsRoute
@@ -288,6 +297,7 @@ export interface FileRouteTypes {
     | '/closer-hub'
     | '/employees'
     | '/exports'
+    | '/imports'
     | '/leave'
     | '/mission-control'
     | '/notifications'
@@ -318,6 +328,7 @@ export interface FileRouteTypes {
     | '/closer-hub'
     | '/employees'
     | '/exports'
+    | '/imports'
     | '/leave'
     | '/mission-control'
     | '/notifications'
@@ -349,6 +360,7 @@ export interface FileRouteTypes {
     | '/_shell/closer-hub'
     | '/_shell/employees'
     | '/_shell/exports'
+    | '/_shell/imports'
     | '/_shell/leave'
     | '/_shell/mission-control'
     | '/_shell/notifications'
@@ -439,6 +451,13 @@ declare module '@tanstack/react-router' {
       path: '/exports'
       fullPath: '/exports'
       preLoaderRoute: typeof ShellExportsRouteImport
+      parentRoute: typeof ShellRoute
+    }
+    '/_shell/imports': {
+      id: '/_shell/imports'
+      path: '/imports'
+      fullPath: '/imports'
+      preLoaderRoute: typeof ShellImportsRouteImport
       parentRoute: typeof ShellRoute
     }
     '/_shell/leave': {
@@ -592,6 +611,7 @@ interface ShellRouteChildren {
   ShellCloserHubRoute: typeof ShellCloserHubRoute
   ShellEmployeesRoute: typeof ShellEmployeesRoute
   ShellExportsRoute: typeof ShellExportsRoute
+  ShellImportsRoute: typeof ShellImportsRoute
   ShellLeaveRoute: typeof ShellLeaveRoute
   ShellMissionControlRoute: typeof ShellMissionControlRoute
   ShellNotificationsRoute: typeof ShellNotificationsRoute
@@ -622,6 +642,7 @@ const ShellRouteChildren: ShellRouteChildren = {
   ShellCloserHubRoute: ShellCloserHubRoute,
   ShellEmployeesRoute: ShellEmployeesRoute,
   ShellExportsRoute: ShellExportsRoute,
+  ShellImportsRoute: ShellImportsRoute,
   ShellLeaveRoute: ShellLeaveRoute,
   ShellMissionControlRoute: ShellMissionControlRoute,
   ShellNotificationsRoute: ShellNotificationsRoute,

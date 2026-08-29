@@ -72,6 +72,51 @@ export async function loadCloserMeta(ids: number[]): Promise<Map<number, StaffMe
   return map;
 }
 
+export interface StaffCodeRef {
+  id: number;
+  userId: number;
+  code: string;
+}
+
+/** Batch-resolve agent codes → { id, userId, code } (bulk import). */
+export async function loadAgentsByCodes(codes: string[]): Promise<Map<string, StaffCodeRef>> {
+  const map = new Map<string, StaffCodeRef>();
+  const unique = [...new Set(codes.filter(Boolean))];
+  if (!unique.length) return map;
+  const rows = await getDb()
+    .select({ id: agents.id, userId: agents.userId, code: agents.agentCode })
+    .from(agents)
+    .where(inArray(agents.agentCode, unique));
+  for (const r of rows) map.set(r.code, r);
+  return map;
+}
+
+/** Batch-resolve closer codes → { id, userId, code } (bulk import). */
+export async function loadClosersByCodes(codes: string[]): Promise<Map<string, StaffCodeRef>> {
+  const map = new Map<string, StaffCodeRef>();
+  const unique = [...new Set(codes.filter(Boolean))];
+  if (!unique.length) return map;
+  const rows = await getDb()
+    .select({ id: closers.id, userId: closers.userId, code: closers.closerCode })
+    .from(closers)
+    .where(inArray(closers.closerCode, unique));
+  for (const r of rows) map.set(r.code, r);
+  return map;
+}
+
+/** agents.id → users.id, for hydrating existing-lead ownership on import. */
+export async function loadAgentUserIds(agentIds: number[]): Promise<Map<number, number>> {
+  const map = new Map<number, number>();
+  const unique = [...new Set(agentIds.filter((n) => Number.isFinite(n)))];
+  if (!unique.length) return map;
+  const rows = await getDb()
+    .select({ id: agents.id, userId: agents.userId })
+    .from(agents)
+    .where(inArray(agents.id, unique));
+  for (const r of rows) map.set(r.id, r.userId);
+  return map;
+}
+
 /** Resolve the authenticated user into a Lead authorization actor. */
 export async function resolveLeadActor(user: User): Promise<LeadActor> {
   let agentId: number | null = null;
