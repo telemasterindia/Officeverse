@@ -32,10 +32,12 @@ import {
   getAgentByUserId,
   getAgentWithUser,
   getCloserByCode,
+  getCloserWithUser,
   loadAgentMeta,
   loadCloserMeta,
   resolveLeadActor,
 } from "../db/repos/staff";
+import { onLeadAccepted, onLeadSubmitted, onSale, recognizeSafe } from "../live/recognition";
 import { leads } from "@/lib/db/schema";
 import type { Lead, NewLead, User } from "@/lib/db/schema";
 import type { CreateLeadInput, ListLeadsInput, UpdateLeadInput } from "../validation/leads";
@@ -252,6 +254,14 @@ export async function createLead(
     userAgent: meta.userAgent ?? null,
   });
 
+  // Phase 21: server-confirmed lead submission → Office TV recognition.
+  // Best-effort; never blocks or fails lead creation. Follow-up activity does
+  // NOT go through here.
+  const submitterUserId = user.role === "agent" ? user.id : (agentWithUser?.user.id ?? null);
+  if (submitterUserId != null) {
+    recognizeSafe(onLeadSubmitted({ agentUserId: submitterUserId, leadCode: row.leadCode }));
+  }
+
   return hydrateOne(row);
 }
 
@@ -338,6 +348,30 @@ export async function updateLead(
     ip: meta.ip ?? null,
     userAgent: meta.userAgent ?? null,
   });
+
+  // Phase 21: a SERVER-VALIDATED status transition → Office TV recognition.
+  // Best-effort; never blocks the update. Only the guarded transitions below
+  // celebrate — nothing here trusts a client "this was a sale" claim.
+  if ("status" in allowed && allowed["status"] && allowed["status"] !== row.status) {
+    const to = allowed["status"] as Lead["status"];
+    if (row.status === "ASSIGNED" && to === "ACCEPTED" && row.agentId != null) {
+      const aw = await getAgentWithUser(row.agentId).catch(() => undefined);
+      if (aw) recognizeSafe(onLeadAccepted({ agentUserId: aw.user.id, leadCode: row.leadCode }));
+    } else if (to === "COMPLETED") {
+      let subjectUserId: number | null = null;
+      if (row.assignedCloserId != null) {
+        subjectUserId =
+          (await getCloserWithUser(row.assignedCloserId).catch(() => undefined))?.user.id ?? null;
+      }
+      if (subjectUserId == null && row.agentId != null) {
+        subjectUserId =
+          (await getAgentWithUser(row.agentId).catch(() => undefined))?.user.id ?? null;
+      }
+      if (subjectUserId != null) {
+        recognizeSafe(onSale({ userId: subjectUserId, leadCode: row.leadCode }));
+      }
+    }
+  }
 
   return hydrateOne(updated);
 }

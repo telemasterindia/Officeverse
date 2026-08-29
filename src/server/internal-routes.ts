@@ -22,6 +22,8 @@ import { nowIST } from "./time";
 import { collectHealth, publicLiveness } from "./health";
 import { processMonthlySalarySlips } from "./hr/salary-slip-batch";
 import { previousPayrollMonthIST } from "./hr/salary-slip-cron";
+import { tvState, tvAssetBytes } from "./live/tv-service";
+import { HttpError } from "./http-error";
 import { isDbConfigured } from "@/lib/db";
 
 function json(body: unknown, status = 200): Response {
@@ -56,6 +58,54 @@ export async function handleInternal(request: Request): Promise<Response | null>
       return json(deep ? report : publicLiveness(report));
     } catch {
       return json({ ok: false, service: "officeverse", time: nowIST(), database: "error" }, 503);
+    }
+  }
+
+  // ---- Office TV (Phase 21): read-only, display-token authenticated --------
+  if (path === "/api/office-tv/state") {
+    if (request.method !== "GET") return json({ error: "method_not_allowed" }, 405);
+    const token =
+      request.headers.get("x-display-token") ??
+      request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ??
+      url.searchParams.get("token") ??
+      "";
+    const kindParam = url.searchParams.get("kind") ?? undefined;
+    const sinceParam = Number(url.searchParams.get("since") ?? "0") || 0;
+    try {
+      const state = await tvState(token, { kind: kindParam, sinceSeq: sinceParam });
+      return json(state);
+    } catch (err) {
+      if (err instanceof HttpError) {
+        return json({ error: err.code ?? "error", message: err.message }, err.status);
+      }
+      return json({ error: "tv_state_failed" }, 500);
+    }
+  }
+
+  if (path === "/api/office-tv/asset") {
+    if (request.method !== "GET") return json({ error: "method_not_allowed" }, 405);
+    const token =
+      request.headers.get("x-display-token") ??
+      request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ??
+      url.searchParams.get("token") ??
+      "";
+    const id = Number(url.searchParams.get("id") ?? "0") || 0;
+    try {
+      const asset = id > 0 ? await tvAssetBytes(token, id) : null;
+      if (!asset) return json({ error: "not_found" }, 404);
+      return new Response(Buffer.from(asset.bytes), {
+        status: 200,
+        headers: {
+          "content-type": asset.mime,
+          "cache-control": "private, max-age=300",
+          "content-length": String(asset.bytes.byteLength),
+        },
+      });
+    } catch (err) {
+      if (err instanceof HttpError) {
+        return json({ error: err.code ?? "error" }, err.status);
+      }
+      return json({ error: "asset_failed" }, 500);
     }
   }
 

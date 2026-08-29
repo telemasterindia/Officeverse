@@ -16,6 +16,7 @@ import {
   ShieldCheck,
   Target,
   Trophy,
+  Tv,
   Upload,
   UserCircle,
   UserPlus,
@@ -114,6 +115,7 @@ export const NAV_BY_ROLE: Record<Role, { group: string; items: NavItem[] }[]> = 
         { label: "Assignments", to: "/assignments", icon: Target },
         { label: "Agent Presence", to: "/presence", icon: Activity },
         { label: "Leaderboard", to: "/leaderboard", icon: Trophy },
+        { label: "Live Office", to: "/live", icon: Tv },
       ],
     },
     {

@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ShellRouteImport } from './routes/_shell'
+import { Route as OfficeTvRouteImport } from './routes/office-tv'
 import { Route as ShellAssignmentsRouteImport } from './routes/_shell.assignments'
 import { Route as ShellAttendanceRouteImport } from './routes/_shell.attendance'
 import { Route as ShellAuditRouteImport } from './routes/_shell.audit'
@@ -22,6 +23,7 @@ import { Route as ShellHolidaysRouteImport } from './routes/_shell.holidays'
 import { Route as ShellImportsRouteImport } from './routes/_shell.imports'
 import { Route as ShellLeaderboardRouteImport } from './routes/_shell.leaderboard'
 import { Route as ShellLeaveRouteImport } from './routes/_shell.leave'
+import { Route as ShellLiveRouteImport } from './routes/_shell.live'
 import { Route as ShellMissionControlRouteImport } from './routes/_shell.mission-control'
 import { Route as ShellNotificationsRouteImport } from './routes/_shell.notifications'
 import { Route as ShellPayrollRouteImport } from './routes/_shell.payroll'
@@ -51,6 +53,11 @@ const IndexRoute = IndexRouteImport.update({
 } as any)
 const ShellRoute = ShellRouteImport.update({
   id: '/_shell',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OfficeTvRoute = OfficeTvRouteImport.update({
+  id: '/office-tv',
+  path: '/office-tv',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ShellAssignmentsRoute = ShellAssignmentsRouteImport.update({
@@ -106,6 +113,11 @@ const ShellLeaderboardRoute = ShellLeaderboardRouteImport.update({
 const ShellLeaveRoute = ShellLeaveRouteImport.update({
   id: '/leave',
   path: '/leave',
+  getParentRoute: () => ShellRoute,
+} as any)
+const ShellLiveRoute = ShellLiveRouteImport.update({
+  id: '/live',
+  path: '/live',
   getParentRoute: () => ShellRoute,
 } as any)
 const ShellMissionControlRoute = ShellMissionControlRouteImport.update({
@@ -217,6 +229,7 @@ const ShellLeadsNewRoute = ShellLeadsNewRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/office-tv': typeof OfficeTvRoute
   '/assignments': typeof ShellAssignmentsRoute
   '/attendance': typeof ShellAttendanceRoute
   '/audit': typeof ShellAuditRoute
@@ -228,6 +241,7 @@ export interface FileRoutesByFullPath {
   '/imports': typeof ShellImportsRoute
   '/leaderboard': typeof ShellLeaderboardRoute
   '/leave': typeof ShellLeaveRoute
+  '/live': typeof ShellLiveRoute
   '/mission-control': typeof ShellMissionControlRoute
   '/notifications': typeof ShellNotificationsRoute
   '/payroll': typeof ShellPayrollRoute
@@ -252,6 +266,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/office-tv': typeof OfficeTvRoute
   '/assignments': typeof ShellAssignmentsRoute
   '/attendance': typeof ShellAttendanceRoute
   '/audit': typeof ShellAuditRoute
@@ -263,6 +278,7 @@ export interface FileRoutesByTo {
   '/imports': typeof ShellImportsRoute
   '/leaderboard': typeof ShellLeaderboardRoute
   '/leave': typeof ShellLeaveRoute
+  '/live': typeof ShellLiveRoute
   '/mission-control': typeof ShellMissionControlRoute
   '/notifications': typeof ShellNotificationsRoute
   '/payroll': typeof ShellPayrollRoute
@@ -289,6 +305,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/_shell': typeof ShellRouteWithChildren
+  '/office-tv': typeof OfficeTvRoute
   '/_shell/assignments': typeof ShellAssignmentsRoute
   '/_shell/attendance': typeof ShellAttendanceRoute
   '/_shell/audit': typeof ShellAuditRoute
@@ -300,6 +317,7 @@ export interface FileRoutesById {
   '/_shell/imports': typeof ShellImportsRoute
   '/_shell/leaderboard': typeof ShellLeaderboardRoute
   '/_shell/leave': typeof ShellLeaveRoute
+  '/_shell/live': typeof ShellLiveRoute
   '/_shell/mission-control': typeof ShellMissionControlRoute
   '/_shell/notifications': typeof ShellNotificationsRoute
   '/_shell/payroll': typeof ShellPayrollRoute
@@ -326,6 +344,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/office-tv'
     | '/assignments'
     | '/attendance'
     | '/audit'
@@ -337,6 +356,7 @@ export interface FileRouteTypes {
     | '/imports'
     | '/leaderboard'
     | '/leave'
+    | '/live'
     | '/mission-control'
     | '/notifications'
     | '/payroll'
@@ -361,6 +381,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/office-tv'
     | '/assignments'
     | '/attendance'
     | '/audit'
@@ -372,6 +393,7 @@ export interface FileRouteTypes {
     | '/imports'
     | '/leaderboard'
     | '/leave'
+    | '/live'
     | '/mission-control'
     | '/notifications'
     | '/payroll'
@@ -397,6 +419,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/_shell'
+    | '/office-tv'
     | '/_shell/assignments'
     | '/_shell/attendance'
     | '/_shell/audit'
@@ -408,6 +431,7 @@ export interface FileRouteTypes {
     | '/_shell/imports'
     | '/_shell/leaderboard'
     | '/_shell/leave'
+    | '/_shell/live'
     | '/_shell/mission-control'
     | '/_shell/notifications'
     | '/_shell/payroll'
@@ -434,6 +458,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ShellRoute: typeof ShellRouteWithChildren
+  OfficeTvRoute: typeof OfficeTvRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -450,6 +475,13 @@ declare module '@tanstack/react-router' {
       path: ''
       fullPath: '/'
       preLoaderRoute: typeof ShellRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/office-tv': {
+      id: '/office-tv'
+      path: '/office-tv'
+      fullPath: '/office-tv'
+      preLoaderRoute: typeof OfficeTvRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_shell/assignments': {
@@ -527,6 +559,13 @@ declare module '@tanstack/react-router' {
       path: '/leave'
       fullPath: '/leave'
       preLoaderRoute: typeof ShellLeaveRouteImport
+      parentRoute: typeof ShellRoute
+    }
+    '/_shell/live': {
+      id: '/_shell/live'
+      path: '/live'
+      fullPath: '/live'
+      preLoaderRoute: typeof ShellLiveRouteImport
       parentRoute: typeof ShellRoute
     }
     '/_shell/mission-control': {
@@ -691,6 +730,7 @@ interface ShellRouteChildren {
   ShellImportsRoute: typeof ShellImportsRoute
   ShellLeaderboardRoute: typeof ShellLeaderboardRoute
   ShellLeaveRoute: typeof ShellLeaveRoute
+  ShellLiveRoute: typeof ShellLiveRoute
   ShellMissionControlRoute: typeof ShellMissionControlRoute
   ShellNotificationsRoute: typeof ShellNotificationsRoute
   ShellPayrollRoute: typeof ShellPayrollRoute
@@ -726,6 +766,7 @@ const ShellRouteChildren: ShellRouteChildren = {
   ShellImportsRoute: ShellImportsRoute,
   ShellLeaderboardRoute: ShellLeaderboardRoute,
   ShellLeaveRoute: ShellLeaveRoute,
+  ShellLiveRoute: ShellLiveRoute,
   ShellMissionControlRoute: ShellMissionControlRoute,
   ShellNotificationsRoute: ShellNotificationsRoute,
   ShellPayrollRoute: ShellPayrollRoute,
@@ -754,6 +795,7 @@ const ShellRouteWithChildren = ShellRoute._addFileChildren(ShellRouteChildren)
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ShellRoute: ShellRouteWithChildren,
+  OfficeTvRoute: OfficeTvRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

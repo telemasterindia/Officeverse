@@ -43,6 +43,19 @@ export async function getAgentWithUser(
   return rows[0];
 }
 
+/** Closer row + its user (Phase 21 — recognition needs the closer's user id). */
+export async function getCloserWithUser(
+  closerId: number,
+): Promise<{ closer: Closer; user: User } | undefined> {
+  const rows = await getDb()
+    .select({ closer: closers, user: users })
+    .from(closers)
+    .innerJoin(users, eq(users.id, closers.userId))
+    .where(eq(closers.id, closerId))
+    .limit(1);
+  return rows[0];
+}
+
 export interface StaffMeta {
   code: string;
   name: string;

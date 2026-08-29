@@ -1574,6 +1574,178 @@ export const gamificationStreaks = mysqlTable(
   }),
 );
 
+/* ================================================================== *
+ *  OFFICE TV / LIVE EXPERIENCE (Phase 21)                             *
+ *                                                                    *
+ *  A READ-ONLY live office scoreboard surface (/office-tv). It never  *
+ *  mutates the CRM. It reads the Phase-20 authoritative leaderboard   *
+ *  and a small recognition-event log. Admin broadcasts are            *
+ *  ANNOUNCEMENTS ONLY — they never create payroll / salary /          *
+ *  commission / incentive data. Points remain abstract, not money.    *
+ * ================================================================== */
+
+export const TV_ANNOUNCEMENT_AUDIENCES = ["all", "agents", "closers"] as const;
+export const TV_ANNOUNCEMENT_PRIORITIES = ["NORMAL", "IMPORTANT", "URGENT"] as const;
+export const TV_ANNOUNCEMENT_STATUSES = ["scheduled", "published", "stopped", "expired"] as const;
+export const CELEBRATION_ASSET_KINDS = ["video", "effect"] as const;
+
+/* -- 31 · office_tv_displays  (scoped, revocable display tokens) ----- *
+ *  A TV authenticates with a hashed display token — NEVER an Admin     *
+ *  account. Scope is read-only; no CRM / payroll / HR / user-mgmt.     */
+export const officeTvDisplays = mysqlTable(
+  "office_tv_displays",
+  {
+    id: int("id", { unsigned: true }).autoincrement().primaryKey(),
+    name: varchar("name", { length: 80 }).notNull(),
+    /** sha-256 hex of the bearer token; the raw token is shown once at creation */
+    tokenHash: varchar("token_hash", { length: 191 }).notNull(),
+    /** first 8 chars of the raw token — lets Admin identify a row without the secret */
+    tokenPrefix: varchar("token_prefix", { length: 16 }).notNull(),
+    /** read-only capability set; kept as a short string for forward-compat */
+    scope: varchar("scope", { length: 40 }).notNull().default("tv_read"),
+    enabled: boolean("enabled").notNull().default(true),
+    createdByUserId: int("created_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    createdAt: dt("created_at").notNull(),
+    lastSeenAt: dt("last_seen_at"),
+    revokedAt: dt("revoked_at"),
+    rotatedAt: dt("rotated_at"),
+  },
+  (t) => ({
+    tokenHashUq: unique("office_tv_display_token_hash_uq").on(t.tokenHash),
+  }),
+);
+
+/* -- 32 · office_tv_settings  (one-row TV configuration) ------------- *
+ *  Minimum data-driven config for Phase 21. `third_accepted_threshold` *
+ *  is a CELEBRATION threshold only — it is NOT a salary/incentive      *
+ *  rule and never creates money.                                       */
+export const officeTvSettings = mysqlTable("office_tv_settings", {
+  id: int("id", { unsigned: true }).primaryKey().default(1),
+  displayName: varchar("display_name", { length: 80 }).notNull().default("Officeverse Live"),
+  /** seconds a celebration/announcement holds before returning to the board */
+  rotationSec: int("rotation_sec", { unsigned: true }).notNull().default(12),
+  /** which Phase-20 leaderboard window the TV shows by default */
+  leaderboardWindow: varchar("leaderboard_window", { length: 12 }).notNull().default("daily"),
+  /** "low" | "normal" | "high" — presentation only */
+  celebrationIntensity: varchar("celebration_intensity", { length: 12 })
+    .notNull()
+    .default("normal"),
+  soundEnabled: boolean("sound_enabled").notNull().default(false),
+  /** accepted-leads count that escalates LEAD_ACCEPTED → a heavy celebration */
+  thirdAcceptedThreshold: int("third_accepted_threshold", { unsigned: true }).notNull().default(3),
+  /** emit a TEAM_MILESTONE every N team accepted-leads in a day; 0 = disabled */
+  teamMilestoneEvery: int("team_milestone_every", { unsigned: true }).notNull().default(0),
+  updatedByUserId: int("updated_by_user_id", { unsigned: true }).references(() => users.id, {
+    onDelete: "set null",
+    onUpdate: "cascade",
+  }),
+  updatedAt: dt("updated_at"),
+});
+
+/* -- 33 · celebration_assets  (approved celebration video library) --- *
+ *  Original / licensed / owner-supplied assets only. NO AI generation, *
+ *  NO copyrighted sports broadcast footage. `effect` rows map a        *
+ *  category to a built-in Phase-19 CSS effect (no bytes).              */
+export const celebrationAssets = mysqlTable(
+  "celebration_assets",
+  {
+    id: int("id", { unsigned: true }).autoincrement().primaryKey(),
+    /** VICTORY | FIREWORKS | CONFETTI | GOLD | MONEY | ENERGY | CHAMPION | PARTY | FESTIVAL */
+    category: varchar("category", { length: 24 }).notNull(),
+    kind: mysqlEnum("kind", CELEBRATION_ASSET_KINDS).notNull().default("video"),
+    label: varchar("label", { length: 80 }).notNull(),
+    /** storage key for an uploaded video (validated bytes); null for built-in effects */
+    storageKey: varchar("storage_key", { length: 255 }),
+    mime: varchar("mime", { length: 60 }),
+    sizeBytes: int("size_bytes", { unsigned: true }),
+    durationMs: int("duration_ms", { unsigned: true }),
+    /** built-in effect name (Phase-19) when kind = "effect" */
+    effect: varchar("effect", { length: 24 }),
+    enabled: boolean("enabled").notNull().default(true),
+    builtin: boolean("builtin").notNull().default(false),
+    uploadedByUserId: int("uploaded_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    createdAt: dt("created_at").notNull(),
+    updatedAt: dt("updated_at"),
+  },
+  (t) => ({
+    categoryIdx: index("celebration_assets_category_idx").on(t.category, t.enabled),
+  }),
+);
+
+/* -- 34 · office_tv_announcements  (admin broadcast engine) --------- */
+export const officeTvAnnouncements = mysqlTable(
+  "office_tv_announcements",
+  {
+    id: int("id", { unsigned: true }).autoincrement().primaryKey(),
+    title: varchar("title", { length: 120 }).notNull(),
+    subtitle: varchar("subtitle", { length: 160 }),
+    message: varchar("message", { length: 600 }).notNull(),
+    audience: mysqlEnum("audience", TV_ANNOUNCEMENT_AUDIENCES).notNull().default("all"),
+    /** null = every process/team */
+    process: mysqlEnum("process", PROCESS_CODES),
+    effect: varchar("effect", { length: 24 }),
+    assetId: int("asset_id", { unsigned: true }).references(() => celebrationAssets.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    durationMs: int("duration_ms", { unsigned: true }).notNull().default(12000),
+    priority: mysqlEnum("priority", TV_ANNOUNCEMENT_PRIORITIES).notNull().default("NORMAL"),
+    status: mysqlEnum("status", TV_ANNOUNCEMENT_STATUSES).notNull().default("scheduled"),
+    /** IST wall-clock; null = show immediately on publish */
+    publishAt: dt("publish_at"),
+    expiresAt: dt("expires_at"),
+    enabled: boolean("enabled").notNull().default(true),
+    createdByUserId: int("created_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    createdAt: dt("created_at").notNull(),
+    updatedAt: dt("updated_at"),
+    publishedAt: dt("published_at"),
+  },
+  (t) => ({
+    liveIdx: index("office_tv_announcements_live_idx").on(t.status, t.enabled),
+  }),
+);
+
+/* -- 35 · office_tv_events  (recognition log + celebration idempotency) *
+ *  One row per recognition moment. `dedupe_key` is derived from the    *
+ *  confirmed BUSINESS event so a retried request / duplicate webhook   *
+ *  never produces a second celebration. Not a points ledger — points  *
+ *  live in gamification_point_transactions.                            */
+export const officeTvEvents = mysqlTable(
+  "office_tv_events",
+  {
+    id: bigint("id", { mode: "number", unsigned: true }).autoincrement().primaryKey(),
+    /** LEAD_SUBMITTED | LEAD_ACCEPTED | THIRD_ACCEPTED_LEAD | SALE | ACHIEVEMENT_UNLOCKED | TEAM_MILESTONE | ANNOUNCEMENT */
+    kind: varchar("kind", { length: 32 }).notNull(),
+    /** the recognised person; null for team-level / announcement events */
+    subjectUserId: int("subject_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    tier: int("tier", { unsigned: true }).notNull().default(1),
+    effect: varchar("effect", { length: 24 }),
+    assetCategory: varchar("asset_category", { length: 24 }),
+    message: varchar("message", { length: 200 }),
+    referenceType: varchar("reference_type", { length: 40 }),
+    referenceId: varchar("reference_id", { length: 64 }),
+    dedupeKey: varchar("dedupe_key", { length: 191 }).notNull(),
+    operationalDate: dcol("operational_date").notNull(),
+    createdAt: dt("created_at").notNull(),
+  },
+  (t) => ({
+    dedupeUq: unique("office_tv_event_dedupe_uq").on(t.dedupeKey),
+    feedIdx: index("office_tv_events_feed_idx").on(t.operationalDate, t.createdAt),
+  }),
+);
+
 /* ------------------------------------------------------------------ *
  *  15 · schema_meta  (one-row marker: has production been seeded?)    *
  *  Keeps demo/seed data strictly separate from production (Phase 19). *
@@ -1738,3 +1910,13 @@ export type GamificationUserAchievement = typeof gamificationUserAchievements.$i
 export type NewGamificationUserAchievement = typeof gamificationUserAchievements.$inferInsert;
 export type GamificationStreak = typeof gamificationStreaks.$inferSelect;
 export type NewGamificationStreak = typeof gamificationStreaks.$inferInsert;
+export type OfficeTvDisplay = typeof officeTvDisplays.$inferSelect;
+export type NewOfficeTvDisplay = typeof officeTvDisplays.$inferInsert;
+export type OfficeTvSettings = typeof officeTvSettings.$inferSelect;
+export type NewOfficeTvSettings = typeof officeTvSettings.$inferInsert;
+export type CelebrationAsset = typeof celebrationAssets.$inferSelect;
+export type NewCelebrationAsset = typeof celebrationAssets.$inferInsert;
+export type OfficeTvAnnouncement = typeof officeTvAnnouncements.$inferSelect;
+export type NewOfficeTvAnnouncement = typeof officeTvAnnouncements.$inferInsert;
+export type OfficeTvEvent = typeof officeTvEvents.$inferSelect;
+export type NewOfficeTvEvent = typeof officeTvEvents.$inferInsert;
