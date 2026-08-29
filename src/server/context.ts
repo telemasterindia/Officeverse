@@ -7,19 +7,11 @@
  * convenience only.
  */
 import { getRequestHeader, getRequestIP } from "@tanstack/react-start/server";
+import { HttpError } from "./http-error";
 import { readSessionToken, resolveSession, type SessionContext } from "./session";
 import type { User } from "@/lib/db/schema";
 
-export class HttpError extends Error {
-  constructor(
-    public status: number,
-    message: string,
-    public code?: string,
-  ) {
-    super(message);
-    this.name = "HttpError";
-  }
-}
+export { HttpError };
 
 export type Role = User["role"];
 

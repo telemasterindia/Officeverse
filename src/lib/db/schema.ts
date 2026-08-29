@@ -108,6 +108,7 @@ export const IMPORT_ROW_TARGETS = ["lead", "follow_up"] as const;
 
 export const AUDIT_ACTOR_ROLES = ["admin", "agent", "closer", "hr", "system"] as const;
 export const PHOTO_STORAGES = ["local", "s3", "r2", "supabase"] as const;
+export const LEAD_ASSIGNMENT_ACTIONS = ["assign", "reassign", "unassign"] as const;
 
 /* ------------------------------------------------------------------ *
  *  1 · users  (authentication + all staff identity)                  *
@@ -386,6 +387,42 @@ export const leads = mysqlTable(
     shiftDateIdx: index("leads_shift_date_idx").on(t.shiftDate),
     phoneIdx: index("leads_phone_idx").on(t.phoneNormalized),
     emailIdx: index("leads_email_idx").on(t.emailNormalized),
+  }),
+);
+
+/* ------------------------------------------------------------------ *
+ *  5b · lead_assignments  (closer transfer/reassignment history)     *
+ *  The submitting agent (leads.agent_id) is immutable; this table    *
+ *  preserves the timeline of closer assignment so ownership history  *
+ *  is never lost when the current assignee changes (Phase 3).        *
+ * ------------------------------------------------------------------ */
+
+export const leadAssignments = mysqlTable(
+  "lead_assignments",
+  {
+    id: bigint("id", { mode: "number", unsigned: true }).autoincrement().primaryKey(),
+    leadId: int("lead_id", { unsigned: true })
+      .notNull()
+      .references(() => leads.id, { onDelete: "cascade", onUpdate: "cascade" }),
+    fromCloserId: int("from_closer_id", { unsigned: true }).references(() => closers.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    toCloserId: int("to_closer_id", { unsigned: true }).references(() => closers.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    action: mysqlEnum("action", LEAD_ASSIGNMENT_ACTIONS).notNull(),
+    byUserId: int("by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    note: varchar("note", { length: 500 }),
+    createdAt: dt("created_at").notNull(),
+  },
+  (t) => ({
+    leadIdx: index("lead_assignments_lead_idx").on(t.leadId),
+    createdIdx: index("lead_assignments_created_idx").on(t.createdAt),
   }),
 );
 
@@ -670,7 +707,7 @@ export const closersRelations = relations(closers, ({ one, many }) => ({
   assignedLeads: many(leads),
 }));
 
-export const leadsRelations = relations(leads, ({ one }) => ({
+export const leadsRelations = relations(leads, ({ one, many }) => ({
   agent: one(agents, { fields: [leads.agentId], references: [agents.id] }),
   assignedCloser: one(closers, { fields: [leads.assignedCloserId], references: [closers.id] }),
   convertedFromFollowUp: one(followUps, {
@@ -678,6 +715,14 @@ export const leadsRelations = relations(leads, ({ one }) => ({
     references: [followUps.id],
   }),
   import: one(imports, { fields: [leads.importId], references: [imports.id] }),
+  assignments: many(leadAssignments),
+}));
+
+export const leadAssignmentsRelations = relations(leadAssignments, ({ one }) => ({
+  lead: one(leads, { fields: [leadAssignments.leadId], references: [leads.id] }),
+  fromCloser: one(closers, { fields: [leadAssignments.fromCloserId], references: [closers.id] }),
+  toCloser: one(closers, { fields: [leadAssignments.toCloserId], references: [closers.id] }),
+  by: one(users, { fields: [leadAssignments.byUserId], references: [users.id] }),
 }));
 
 export const followUpsRelations = relations(followUps, ({ one, many }) => ({
@@ -734,6 +779,8 @@ export type Closer = typeof closers.$inferSelect;
 export type Client = typeof clients.$inferSelect;
 export type Lead = typeof leads.$inferSelect;
 export type NewLead = typeof leads.$inferInsert;
+export type LeadAssignment = typeof leadAssignments.$inferSelect;
+export type NewLeadAssignment = typeof leadAssignments.$inferInsert;
 export type FollowUp = typeof followUps.$inferSelect;
 export type NewFollowUp = typeof followUps.$inferInsert;
 export type FollowUpAttempt = typeof followUpAttempts.$inferSelect;
