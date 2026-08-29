@@ -50,6 +50,13 @@
       "when": 1788010201144,
       "tag": "0006_hr_leave_off_sandwich",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "5",
+      "when": 1788011259391,
+      "tag": "0007_holidays_regularity_bonus",
+      "breakpoints": true
     }
   ]
 }

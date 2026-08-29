@@ -20,6 +20,16 @@ export function canManageLeave(role: HrRole): boolean {
 }
 export const canViewAllHr = canManageLeave;
 export const canRecalculateHr = canManageLeave;
+/** Phase 12: holiday-calendar management + regularity-bonus recalculation
+ *  are the same Admin / HR gate as leave management. */
+export const canManageHolidays = canManageLeave;
+export const canViewAllBonus = canManageLeave;
+
+export function assertCanManageHolidays(role: HrRole): void {
+  if (!canManageHolidays(role)) {
+    throw new HttpError(403, "Only Admin / HR may manage the holiday calendar", "forbidden");
+  }
+}
 
 /** self only — a client-supplied owner id is never trusted */
 export function canRequestLeaveFor(actorUserId: number, targetUserId: number): boolean {

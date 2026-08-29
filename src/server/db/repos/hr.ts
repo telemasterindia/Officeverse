@@ -16,13 +16,19 @@ import {
   leaveDays,
   leaveRequests,
   offRecords,
+  regularityBonus,
   users,
+  type Holiday,
   type LeaveRequest,
+  type NewHoliday,
   type NewLeaveDay,
   type NewLeaveRequest,
   type NewOffRecord,
+  type NewRegularityBonus,
   type OffRecord,
+  type RegularityBonus,
 } from "@/lib/db/schema";
+import { buildHolidayMap } from "@/server/hr/holiday-map";
 
 /* ------------------------------- leave_requests ---------------------- */
 
@@ -280,14 +286,172 @@ export async function holidayMapInRange(
   process: string,
   ex: DBX = getDb(),
 ): Promise<Map<string, { reason: string }>> {
+  // widen the fetch window so a holiday whose OBSERVED date lands in range is
+  // included even if its actual date sits just outside it
   const rows = await ex
     .select()
     .from(holidays)
     .where(and(gte(holidays.holidayDate, from), lte(holidays.holidayDate, to)));
-  const map = new Map<string, { reason: string }>();
-  for (const h of rows) {
-    if (h.appliesToProcess && h.appliesToProcess !== process) continue;
-    map.set(h.holidayDate, { reason: h.holidayType });
+  return buildHolidayMap(rows, process);
+}
+
+/* -------- Phase 12: holiday CRUD (Admin/HR) + read for employees --- */
+
+export async function insertHoliday(v: NewHoliday, ex: DBX = getDb()): Promise<number> {
+  const res = await ex.insert(holidays).values(v);
+  return Number((res as unknown as { insertId?: number | string }).insertId ?? 0);
+}
+
+export async function getHolidayById(id: number, ex: DBX = getDb()): Promise<Holiday | undefined> {
+  const rows = await ex.select().from(holidays).where(eq(holidays.id, id)).limit(1);
+  return rows[0];
+}
+
+export async function updateHoliday(
+  id: number,
+  patch: Partial<NewHoliday>,
+  ex: DBX = getDb(),
+): Promise<void> {
+  await ex.update(holidays).set(patch).where(eq(holidays.id, id));
+}
+
+export interface HolidayFilter {
+  year?: string | undefined; // "YYYY"
+  type?: string | undefined;
+  process?: string | undefined;
+  activeOnly?: boolean | undefined;
+}
+
+export async function listHolidays(f: HolidayFilter, ex: DBX = getDb()): Promise<Holiday[]> {
+  const conds: SQL[] = [];
+  if (f.year) {
+    conds.push(gte(holidays.holidayDate, `${f.year}-01-01`));
+    conds.push(lte(holidays.holidayDate, `${f.year}-12-31`));
   }
-  return map;
+  if (f.type) conds.push(eq(holidays.holidayType, f.type as never));
+  if (f.activeOnly) conds.push(eq(holidays.active, true));
+  const rows = await ex
+    .select()
+    .from(holidays)
+    .where(conds.length ? and(...conds) : undefined)
+    .orderBy(asc(holidays.holidayDate))
+    .limit(2000);
+  if (!f.process) return rows;
+  return rows.filter((h) => h.appliesToProcess == null || h.appliesToProcess === f.process);
+}
+
+/* --------------------------- regularity_bonus -------------------- */
+
+export async function getBonus(
+  userId: number,
+  periodMonth: string,
+  ex: DBX = getDb(),
+): Promise<RegularityBonus | undefined> {
+  const rows = await ex
+    .select()
+    .from(regularityBonus)
+    .where(and(eq(regularityBonus.userId, userId), eq(regularityBonus.periodMonth, periodMonth)))
+    .limit(1);
+  return rows[0];
+}
+
+export async function upsertBonus(v: NewRegularityBonus, ex: DBX = getDb()): Promise<void> {
+  const existing = await getBonus(v.userId, v.periodMonth, ex);
+  if (existing) {
+    await ex
+      .update(regularityBonus)
+      .set({
+        eligible: v.eligible,
+        bonusAmount: v.bonusAmount ?? 0,
+        leaveCount: v.leaveCount ?? 0,
+        offCount: v.offCount ?? 0,
+        disqualifyingReasons: v.disqualifyingReasons ?? [],
+        calculatedAt: v.calculatedAt,
+        calculationVersion: v.calculationVersion ?? "v1",
+        updatedAt: v.updatedAt,
+      })
+      .where(eq(regularityBonus.id, existing.id));
+  } else {
+    await ex.insert(regularityBonus).values(v);
+  }
+}
+
+export interface BonusFilter {
+  month?: string | undefined;
+  employee?: string | undefined;
+  process?: string | undefined;
+  eligible?: boolean | undefined;
+}
+export interface BonusListRow extends RegularityBonus {
+  employeeName: string;
+  employeeProcess: string;
+}
+export async function listBonusByFilters(
+  f: BonusFilter,
+  ex: DBX = getDb(),
+): Promise<BonusListRow[]> {
+  const conds: SQL[] = [];
+  if (f.month) conds.push(eq(regularityBonus.periodMonth, f.month));
+  if (f.eligible !== undefined) conds.push(eq(regularityBonus.eligible, f.eligible));
+  const rows = await ex
+    .select({
+      row: regularityBonus,
+      employeeName: users.fullName,
+      employeeEmail: users.email,
+      employeeProcess: users.process,
+    })
+    .from(regularityBonus)
+    .innerJoin(users, eq(users.id, regularityBonus.userId))
+    .where(conds.length ? and(...conds) : undefined)
+    .orderBy(desc(regularityBonus.periodMonth))
+    .limit(3000);
+  const q = f.employee?.trim().toLowerCase();
+  return rows
+    .filter(
+      (r) =>
+        (!q ||
+          r.employeeName.toLowerCase().includes(q) ||
+          r.employeeEmail.toLowerCase().includes(q)) &&
+        (!f.process || r.employeeProcess === f.process),
+    )
+    .map((r) => ({ ...r.row, employeeName: r.employeeName, employeeProcess: r.employeeProcess }));
+}
+
+/** distinct leave_days count in a calendar month (ORIGINAL + SANDWICH). */
+export async function countLeaveDaysInMonth(
+  userId: number,
+  from: string,
+  to: string,
+  ex: DBX = getDb(),
+): Promise<number> {
+  const rows = await ex
+    .select({ n: sql<number>`count(distinct ${leaveDays.leaveDate})` })
+    .from(leaveDays)
+    .where(
+      and(
+        eq(leaveDays.userId, userId),
+        gte(leaveDays.leaveDate, from),
+        lte(leaveDays.leaveDate, to),
+      ),
+    );
+  return Number(rows[0]?.n ?? 0);
+}
+
+/** ACTIVE off_records for a month. */
+export async function countActiveOffInMonth(
+  userId: number,
+  periodMonth: string,
+  ex: DBX = getDb(),
+): Promise<number> {
+  const rows = await ex
+    .select({ n: sql<number>`count(*)` })
+    .from(offRecords)
+    .where(
+      and(
+        eq(offRecords.userId, userId),
+        eq(offRecords.periodMonth, periodMonth),
+        eq(offRecords.status, "ACTIVE"),
+      ),
+    );
+  return Number(rows[0]?.n ?? 0);
 }

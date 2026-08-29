@@ -973,17 +973,70 @@ export const holidays = mysqlTable(
   "holidays",
   {
     id: bigint("id", { mode: "number", unsigned: true }).autoincrement().primaryKey(),
+    /** the ACTUAL calendar date of the holiday */
     holidayDate: dcol("holiday_date").notNull(),
+    /** the OBSERVED date used for company scheduling (null = same as holidayDate).
+     *  The sandwich engine uses observedDate ?? holidayDate as the effective
+     *  non-working day, so a holiday is never counted twice. */
+    observedDate: dcol("observed_date"),
     name: varchar("name", { length: 120 }).notNull(),
     holidayType: mysqlEnum("holiday_type", HOLIDAY_TYPES).notNull(),
     /** null = every process; otherwise scoped to one process */
     appliesToProcess: mysqlEnum("applies_to_process", PROCESS_CODES),
+    /** true when observedDate differs from holidayDate (weekend shift) */
     observed: boolean("observed").notNull().default(false),
+    /** inactive holidays are excluded from the calendar + the sandwich engine */
+    active: boolean("active").notNull().default(true),
+    createdByUserId: int("created_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    updatedByUserId: int("updated_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
     createdAt: dt("created_at").notNull(),
+    updatedAt: dt("updated_at").notNull(),
   },
   (t) => ({
     dayTypeUq: unique("holidays_day_type_uq").on(t.holidayDate, t.holidayType, t.appliesToProcess),
     dateIdx: index("holidays_date_idx").on(t.holidayDate),
+    activeIdx: index("holidays_active_idx").on(t.active, t.holidayDate),
+  }),
+);
+
+/* ------------------------------------------------------------------ *
+ *  21 · regularity_bonus  (₹1,000 monthly bonus — Phase 12)          *
+ *  Durable, idempotent per (user, month). Consumes the authoritative *
+ *  Phase-11 outputs (approved leave_days + effective off_records) —  *
+ *  never attendance.status directly. Recalculable at any time.       *
+ * ------------------------------------------------------------------ */
+
+export const regularityBonus = mysqlTable(
+  "regularity_bonus",
+  {
+    id: bigint("id", { mode: "number", unsigned: true }).autoincrement().primaryKey(),
+    userId: int("user_id", { unsigned: true })
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    /** applicable calendar month, "YYYY-MM" */
+    periodMonth: varchar("period_month", { length: 7 }).notNull(),
+    eligible: boolean("eligible").notNull(),
+    /** whole rupees — 1000 when eligible, 0 otherwise */
+    bonusAmount: int("bonus_amount", { unsigned: true }).notNull().default(0),
+    leaveCount: int("leave_count", { unsigned: true }).notNull().default(0),
+    offCount: int("off_count", { unsigned: true }).notNull().default(0),
+    /** machine codes, e.g. ["APPROVED_LEAVE","OFF_RECORDED"] */
+    disqualifyingReasons: json("disqualifying_reasons"),
+    calculatedAt: dt("calculated_at").notNull(),
+    calculationVersion: varchar("calculation_version", { length: 16 }).notNull().default("v1"),
+    createdAt: dt("created_at").notNull(),
+    updatedAt: dt("updated_at").notNull(),
+  },
+  (t) => ({
+    userMonthUq: unique("regularity_bonus_user_month_uq").on(t.userId, t.periodMonth),
+    monthIdx: index("regularity_bonus_month_idx").on(t.periodMonth),
+    eligibleIdx: index("regularity_bonus_eligible_idx").on(t.eligible),
   }),
 );
 
@@ -1125,3 +1178,5 @@ export type OffRecord = typeof offRecords.$inferSelect;
 export type NewOffRecord = typeof offRecords.$inferInsert;
 export type Holiday = typeof holidays.$inferSelect;
 export type NewHoliday = typeof holidays.$inferInsert;
+export type RegularityBonus = typeof regularityBonus.$inferSelect;
+export type NewRegularityBonus = typeof regularityBonus.$inferInsert;

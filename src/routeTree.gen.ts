@@ -18,6 +18,7 @@ import { Route as ShellAvatarStudioRouteImport } from './routes/_shell.avatar-st
 import { Route as ShellCloserHubRouteImport } from './routes/_shell.closer-hub'
 import { Route as ShellEmployeesRouteImport } from './routes/_shell.employees'
 import { Route as ShellExportsRouteImport } from './routes/_shell.exports'
+import { Route as ShellHolidaysRouteImport } from './routes/_shell.holidays'
 import { Route as ShellImportsRouteImport } from './routes/_shell.imports'
 import { Route as ShellLeaveRouteImport } from './routes/_shell.leave'
 import { Route as ShellMissionControlRouteImport } from './routes/_shell.mission-control'
@@ -83,6 +84,11 @@ const ShellEmployeesRoute = ShellEmployeesRouteImport.update({
 const ShellExportsRoute = ShellExportsRouteImport.update({
   id: '/exports',
   path: '/exports',
+  getParentRoute: () => ShellRoute,
+} as any)
+const ShellHolidaysRoute = ShellHolidaysRouteImport.update({
+  id: '/holidays',
+  path: '/holidays',
   getParentRoute: () => ShellRoute,
 } as any)
 const ShellImportsRoute = ShellImportsRouteImport.update({
@@ -206,6 +212,7 @@ export interface FileRoutesByFullPath {
   '/closer-hub': typeof ShellCloserHubRoute
   '/employees': typeof ShellEmployeesRoute
   '/exports': typeof ShellExportsRoute
+  '/holidays': typeof ShellHolidaysRoute
   '/imports': typeof ShellImportsRoute
   '/leave': typeof ShellLeaveRoute
   '/mission-control': typeof ShellMissionControlRoute
@@ -238,6 +245,7 @@ export interface FileRoutesByTo {
   '/closer-hub': typeof ShellCloserHubRoute
   '/employees': typeof ShellEmployeesRoute
   '/exports': typeof ShellExportsRoute
+  '/holidays': typeof ShellHolidaysRoute
   '/imports': typeof ShellImportsRoute
   '/leave': typeof ShellLeaveRoute
   '/mission-control': typeof ShellMissionControlRoute
@@ -272,6 +280,7 @@ export interface FileRoutesById {
   '/_shell/closer-hub': typeof ShellCloserHubRoute
   '/_shell/employees': typeof ShellEmployeesRoute
   '/_shell/exports': typeof ShellExportsRoute
+  '/_shell/holidays': typeof ShellHolidaysRoute
   '/_shell/imports': typeof ShellImportsRoute
   '/_shell/leave': typeof ShellLeaveRoute
   '/_shell/mission-control': typeof ShellMissionControlRoute
@@ -306,6 +315,7 @@ export interface FileRouteTypes {
     | '/closer-hub'
     | '/employees'
     | '/exports'
+    | '/holidays'
     | '/imports'
     | '/leave'
     | '/mission-control'
@@ -338,6 +348,7 @@ export interface FileRouteTypes {
     | '/closer-hub'
     | '/employees'
     | '/exports'
+    | '/holidays'
     | '/imports'
     | '/leave'
     | '/mission-control'
@@ -371,6 +382,7 @@ export interface FileRouteTypes {
     | '/_shell/closer-hub'
     | '/_shell/employees'
     | '/_shell/exports'
+    | '/_shell/holidays'
     | '/_shell/imports'
     | '/_shell/leave'
     | '/_shell/mission-control'
@@ -463,6 +475,13 @@ declare module '@tanstack/react-router' {
       path: '/exports'
       fullPath: '/exports'
       preLoaderRoute: typeof ShellExportsRouteImport
+      parentRoute: typeof ShellRoute
+    }
+    '/_shell/holidays': {
+      id: '/_shell/holidays'
+      path: '/holidays'
+      fullPath: '/holidays'
+      preLoaderRoute: typeof ShellHolidaysRouteImport
       parentRoute: typeof ShellRoute
     }
     '/_shell/imports': {
@@ -630,6 +649,7 @@ interface ShellRouteChildren {
   ShellCloserHubRoute: typeof ShellCloserHubRoute
   ShellEmployeesRoute: typeof ShellEmployeesRoute
   ShellExportsRoute: typeof ShellExportsRoute
+  ShellHolidaysRoute: typeof ShellHolidaysRoute
   ShellImportsRoute: typeof ShellImportsRoute
   ShellLeaveRoute: typeof ShellLeaveRoute
   ShellMissionControlRoute: typeof ShellMissionControlRoute
@@ -662,6 +682,7 @@ const ShellRouteChildren: ShellRouteChildren = {
   ShellCloserHubRoute: ShellCloserHubRoute,
   ShellEmployeesRoute: ShellEmployeesRoute,
   ShellExportsRoute: ShellExportsRoute,
+  ShellHolidaysRoute: ShellHolidaysRoute,
   ShellImportsRoute: ShellImportsRoute,
   ShellLeaveRoute: ShellLeaveRoute,
   ShellMissionControlRoute: ShellMissionControlRoute,
