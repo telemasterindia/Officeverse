@@ -146,6 +146,25 @@ export const AUDIT_ACTOR_ROLES = ["admin", "agent", "closer", "hr", "system"] as
 export const PHOTO_STORAGES = ["local", "s3", "r2", "supabase"] as const;
 export const LEAD_ASSIGNMENT_ACTIONS = ["assign", "reassign", "unassign"] as const;
 
+/* HR Attendance Foundation (Phase 10) — raw-fact enums. Off-conversion,
+ * leave, holiday and incentive rules are DEFERRED to a later HR phase. */
+export const ATTENDANCE_CHECK_IN_STATUSES = ["ON_TIME", "SHORT", "LATE", "PENDING"] as const;
+export const ATTENDANCE_CHECK_OUT_STATUSES = [
+  "ON_TIME",
+  "SHORT",
+  "EARLY_DEPARTURE",
+  "PENDING",
+] as const;
+export const ATTENDANCE_STATUSES = [
+  "ON_TIME",
+  "SHORT_ATTENDANCE",
+  "LATE",
+  "EARLY_DEPARTURE",
+  "PENDING",
+  "ABSENT",
+] as const;
+export const ATTENDANCE_SOURCES = ["derived", "corrected"] as const;
+
 /* ------------------------------------------------------------------ *
  *  1 · users  (authentication + all staff identity)                  *
  * ------------------------------------------------------------------ */
@@ -753,6 +772,81 @@ export const sessions = mysqlTable(
 );
 
 /* ------------------------------------------------------------------ *
+ *  16 · attendance  (HR Attendance Foundation — Phase 10)            *
+ *                                                                    *
+ *  ONE row per (user, operational shift date). DERIVED from the      *
+ *  authenticated `sessions` (Phase 9A) — NOT a second login tracker  *
+ *  — and persisted so future HR rules (2 late = 1 off, regularity    *
+ *  bonus, salary slip…) keep working after old session rows are      *
+ *  purged. Raw facts only: no leave / holiday / off-conversion /     *
+ *  incentive logic here.                                             *
+ * ------------------------------------------------------------------ */
+
+export const attendance = mysqlTable(
+  "attendance",
+  {
+    id: bigint("id", { mode: "number", unsigned: true }).autoincrement().primaryKey(),
+    userId: int("user_id", { unsigned: true })
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    /** role / process snapshot at record time (a user's role can change later) */
+    role: mysqlEnum("role", ROLES).notNull(),
+    process: mysqlEnum("process", PROCESS_CODES).notNull(),
+    shiftName: varchar("shift_name", { length: 40 }).notNull(),
+
+    /** operational SHIFT DATE (shiftDateIST) — the business day */
+    operationalDate: dcol("operational_date").notNull(),
+
+    /** shift anchors for that operational date, IST wall-clock */
+    reportingAt: dt("reporting_at").notNull(),
+    shiftStartAt: dt("shift_start_at").notNull(),
+    shiftEndAt: dt("shift_end_at").notNull(),
+
+    firstCheckInAt: dt("first_check_in_at"),
+    lastCheckOutAt: dt("last_check_out_at"),
+
+    /** merged (de-overlapped) total session duration for the day, minutes */
+    totalMinutes: int("total_minutes", { unsigned: true }).notNull().default(0),
+    lateMinutes: int("late_minutes", { unsigned: true }).notNull().default(0),
+    earlyDepartureMinutes: int("early_departure_minutes", { unsigned: true }).notNull().default(0),
+
+    checkInStatus: mysqlEnum("check_in_status", ATTENDANCE_CHECK_IN_STATUSES)
+      .notNull()
+      .default("PENDING"),
+    checkOutStatus: mysqlEnum("check_out_status", ATTENDANCE_CHECK_OUT_STATUSES)
+      .notNull()
+      .default("PENDING"),
+    status: mysqlEnum("status", ATTENDANCE_STATUSES).notNull().default("PENDING"),
+    shortAttendance: boolean("short_attendance").notNull().default(false),
+
+    /** distinct sessions that contributed to this day */
+    sessionCount: int("session_count", { unsigned: true }).notNull().default(0),
+
+    source: mysqlEnum("source", ATTENDANCE_SOURCES).notNull().default("derived"),
+
+    /* --- correction / audit trail (set only when an Admin/HR corrects a row) --- */
+    correctedByUserId: int("corrected_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    correctedAt: dt("corrected_at"),
+    correctionReason: varchar("correction_reason", { length: 500 }),
+    /** the derived values BEFORE the first correction — history is never lost */
+    originalSnapshot: json("original_snapshot"),
+
+    createdAt: dt("created_at").notNull(),
+    updatedAt: dt("updated_at").notNull(),
+  },
+  (t) => ({
+    dayUq: unique("attendance_user_day_uq").on(t.userId, t.operationalDate),
+    dateIdx: index("attendance_date_idx").on(t.operationalDate),
+    userDateIdx: index("attendance_user_date_idx").on(t.userId, t.operationalDate),
+    statusIdx: index("attendance_status_idx").on(t.status),
+    processIdx: index("attendance_process_idx").on(t.process),
+  }),
+);
+
+/* ------------------------------------------------------------------ *
  *  15 · schema_meta  (one-row marker: has production been seeded?)    *
  *  Keeps demo/seed data strictly separate from production (Phase 19). *
  * ------------------------------------------------------------------ */
@@ -880,3 +974,5 @@ export type ImportError = typeof importErrors.$inferSelect;
 export type NewImportError = typeof importErrors.$inferInsert;
 export type StaffPhoto = typeof staffPhotos.$inferSelect;
 export type Session = typeof sessions.$inferSelect;
+export type Attendance = typeof attendance.$inferSelect;
+export type NewAttendance = typeof attendance.$inferInsert;

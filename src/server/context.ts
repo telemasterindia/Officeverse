@@ -9,6 +9,7 @@
 import { getRequestHeader, getRequestIP } from "@tanstack/react-start/server";
 import { HttpError } from "./http-error";
 import { devResolve } from "./auth/dev-auth";
+import { touchAttendanceSafe } from "./attendance/service";
 import { readSessionToken, resolveSession, type SessionContext } from "./session";
 import type { User } from "@/lib/db/schema";
 
@@ -48,7 +49,13 @@ export async function getAuth(): Promise<SessionContext | null> {
     /* ignore */
   }
   try {
-    return await resolveSession(token);
+    const ctx = await resolveSession(token);
+    if (ctx) {
+      // Phase 10: recompute this employee's attendance from the session facts.
+      // Throttled + best-effort; never blocks or breaks the request.
+      void touchAttendanceSafe(ctx.user);
+    }
+    return ctx;
   } catch {
     return null;
   }
