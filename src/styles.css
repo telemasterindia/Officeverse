@@ -996,3 +996,108 @@
     transform: none !important;
   }
 }
+
+/* ================================================================= *
+ *  Phase 19 — Photo Effects Engine                                   *
+ *  Lightweight CSS-only frame / ring / glow animations rendered      *
+ *  AROUND the real photo. Particle bursts are drawn on a <canvas>    *
+ *  by the component. All motion is disabled under reduced-motion.    *
+ * ================================================================= */
+
+.ov-photo-fx {
+  position: relative;
+  display: inline-flex;
+  border-radius: 9999px;
+}
+.ov-photo-fx > .ov-photo-fx-glow {
+  position: absolute;
+  inset: -14%;
+  border-radius: 9999px;
+  z-index: 0;
+  pointer-events: none;
+  filter: blur(10px);
+  opacity: 0.9;
+}
+.ov-photo-fx > .ov-photo-fx-img,
+.ov-photo-fx > .ov-photo-fx-ring {
+  position: relative;
+  z-index: 1;
+  border-radius: 9999px;
+}
+.ov-photo-fx-badge {
+  position: absolute;
+  right: -6%;
+  bottom: -6%;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 40%;
+  max-width: 26px;
+  min-width: 16px;
+  aspect-ratio: 1;
+  border-radius: 9999px;
+  background: var(--card);
+  color: var(--foreground);
+  font-size: 0.7em;
+  font-weight: 800;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 0.25);
+}
+.ov-photo-fx-canvas {
+  position: absolute;
+  inset: -40%;
+  z-index: 2;
+  pointer-events: none;
+}
+
+@keyframes ov-fx-glow-soft {
+  0%, 100% { opacity: 0.55; transform: scale(1); }
+  50% { opacity: 0.95; transform: scale(1.04); }
+}
+@keyframes ov-fx-glow-strong {
+  0%, 100% { opacity: 0.6; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.08); }
+}
+@keyframes ov-fx-ring-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--accent) 45%, transparent); }
+  50% { box-shadow: 0 0 0 6px color-mix(in oklab, var(--accent) 0%, transparent); }
+}
+@keyframes ov-fx-ring-spin { to { transform: rotate(360deg); } }
+@keyframes ov-fx-flame {
+  0%, 100% { filter: blur(10px) hue-rotate(0deg); opacity: 0.75; }
+  50% { filter: blur(14px) hue-rotate(-12deg); opacity: 1; }
+}
+
+.ov-fx-glow-soft { animation: ov-fx-glow-soft 2.4s ease-in-out infinite; }
+.ov-fx-glow-strong { animation: ov-fx-glow-strong 1.9s ease-in-out infinite; }
+.ov-fx-ring-pulse { animation: ov-fx-ring-pulse 1.6s ease-out infinite; }
+.ov-fx-ring-spin::before {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 9999px;
+  border: 2px dashed color-mix(in oklab, var(--success) 60%, transparent);
+  animation: ov-fx-ring-spin 6s linear infinite;
+}
+.ov-fx-flame { animation: ov-fx-flame 1.4s ease-in-out infinite; }
+
+/* celebration overlay backdrop */
+.ov-celebration-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: grid;
+  place-items: center;
+  background: color-mix(in oklab, var(--background) 55%, transparent);
+  backdrop-filter: blur(2px);
+  animation: ov-fx-glow-soft 0.4s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ov-fx-glow-soft,
+  .ov-fx-glow-strong,
+  .ov-fx-ring-pulse,
+  .ov-fx-flame { animation: none !important; }
+  .ov-fx-ring-spin::before { animation: none !important; }
+  .ov-photo-fx-canvas { display: none !important; }
+  .ov-celebration-overlay { animation: none !important; }
+}
