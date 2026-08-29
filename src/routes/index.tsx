@@ -5,13 +5,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Card } from "@/components/ui/card";
-import { PROCESSES, DEMO_USERS, ROLE_LABEL } from "@/lib/officeverse/data";
+import { PROCESSES } from "@/lib/officeverse/data";
 import { HOME_BY_ROLE } from "@/lib/officeverse/nav";
 import { useSession } from "@/lib/officeverse/session";
-import type { Role } from "@/lib/officeverse/types";
 import { Workstation } from "@/components/officeverse/workstation";
 import { ProcessRibbon } from "@/components/officeverse/process-ribbon";
-import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -30,18 +28,31 @@ export const Route = createFileRoute("/")({
 });
 
 function LoginPage() {
-  const { user, ready, signIn } = useSession();
+  const { user, ready, devMode, signIn } = useSession();
   const navigate = useNavigate();
-  const [role, setRole] = useState<Role>("agent");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (ready && user) navigate({ to: HOME_BY_ROLE[user.role] });
   }, [ready, user, navigate]);
 
-  const submit = (e: FormEvent) => {
+  const submit = async (e: FormEvent) => {
     e.preventDefault();
-    signIn(role);
-    navigate({ to: HOME_BY_ROLE[role] });
+    if (busy) return;
+    setError(null);
+    setBusy(true);
+    try {
+      await signIn(email.trim(), password);
+      // navigation happens via the effect once `me` resolves
+    } catch {
+      setError("Invalid email or password.");
+      setPassword("");
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -106,35 +117,20 @@ function LoginPage() {
 
         <Card className="surface-panel w-full rounded-3xl border-border/70 p-7">
           <h2 className="font-display text-xl font-bold">Sign in</h2>
-          <p className="mt-1 text-sm text-muted-foreground">Choose your workspace to continue.</p>
-
-          <div className="mt-5 grid grid-cols-2 gap-2">
-            {(Object.keys(DEMO_USERS) as Role[]).map((r) => (
-              <button
-                key={r}
-                type="button"
-                onClick={() => setRole(r)}
-                aria-pressed={role === r}
-                className={cn(
-                  "rounded-xl border px-3 py-2 text-sm font-semibold transition-colors",
-                  role === r
-                    ? "border-primary/50 bg-primary/12 text-foreground glow-ring"
-                    : "border-border bg-secondary/40 text-muted-foreground hover:text-foreground",
-                )}
-              >
-                {ROLE_LABEL[r]}
-              </button>
-            ))}
-          </div>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Use your Officeverse account to continue.
+          </p>
 
           <form className="mt-6 space-y-4" onSubmit={submit}>
             <div className="space-y-2">
-              <Label htmlFor="email">Email / Username</Label>
+              <Label htmlFor="email">Email</Label>
               <Input
                 id="email"
-                type="text"
-                defaultValue={DEMO_USERS[role].email}
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
                 autoComplete="username"
+                required
               />
             </div>
             <div className="space-y-2">
@@ -142,10 +138,19 @@ function LoginPage() {
               <Input
                 id="password"
                 type="password"
-                defaultValue="officeverse"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
                 autoComplete="current-password"
+                required
               />
             </div>
+
+            {error ? (
+              <p role="alert" className="text-sm font-semibold text-destructive">
+                {error}
+              </p>
+            ) : null}
+
             <div className="flex items-center justify-between">
               <label className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Checkbox defaultChecked /> Remember me
@@ -154,13 +159,23 @@ function LoginPage() {
                 Forgot password?
               </button>
             </div>
-            <Button type="submit" className="w-full rounded-full py-6 text-base font-bold">
-              Login
+            <Button
+              type="submit"
+              disabled={busy}
+              className="w-full rounded-full py-6 text-base font-bold"
+            >
+              {busy ? "Signing in…" : "Login"}
             </Button>
           </form>
-          <p className="mt-4 text-center text-xs text-muted-foreground">
-            Signing in as {DEMO_USERS[role].name} · {DEMO_USERS[role].designation}
-          </p>
+
+          {devMode ? (
+            <p className="mt-4 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-[11px] text-muted-foreground">
+              <span className="font-semibold text-warning">Dev mode</span> (no database configured):
+              sign in with <code>admin@officeverse.dev</code> / <code>agent@officeverse.dev</code> /
+              <code>closer@officeverse.dev</code> / <code>hr@officeverse.dev</code> · password{" "}
+              <code>officeverse-dev</code>.
+            </p>
+          ) : null}
         </Card>
       </div>
     </div>

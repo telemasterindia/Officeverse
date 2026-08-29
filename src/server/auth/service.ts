@@ -6,6 +6,7 @@
  */
 import { recordAudit } from "../audit";
 import { hashPassword, needsRehash, verifyPassword } from "../password";
+import { devAuthEnabled, devLogin, devRevoke } from "./dev-auth";
 import { checkLoginRate, clearLoginRate, recordLoginFail } from "./rate-limit";
 import {
   findUserByEmail,
@@ -42,6 +43,21 @@ export async function login(
   password: string,
   meta: RequestMeta = {},
 ): Promise<LoginResult> {
+  // Local dev fallback — active only when NODE_ENV!=production AND no DB.
+  if (devAuthEnabled()) {
+    const dev = devLogin(email, password);
+    if (dev) {
+      return {
+        ok: true,
+        user: toPublicUser(dev.user, null),
+        token: dev.token,
+        expiresAt: dev.expiresAt,
+      };
+    }
+    // dev mode, no user store to consult → uniform rejection, never a 500
+    return { ok: false, code: "invalid_credentials" };
+  }
+
   const rateKey = `${meta.ip ?? "?"}|${email}`;
   const rate = checkLoginRate(rateKey);
   if (!rate.ok) return { ok: false, code: "rate_limited", retryAfterSec: rate.retryAfterSec };
@@ -85,6 +101,7 @@ export async function login(
 }
 
 export async function logout(token: string | undefined, actor?: User): Promise<void> {
+  if (devRevoke(token)) return; // dev session — nothing in the DB
   await revokeSession(token);
   if (actor) {
     await recordAudit({

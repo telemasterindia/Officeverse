@@ -8,6 +8,7 @@
  */
 import { getRequestHeader, getRequestIP } from "@tanstack/react-start/server";
 import { HttpError } from "./http-error";
+import { devResolve } from "./auth/dev-auth";
 import { readSessionToken, resolveSession, type SessionContext } from "./session";
 import type { User } from "@/lib/db/schema";
 
@@ -38,8 +39,16 @@ export function requestInfo(): RequestInfo {
 
 /** Current session or null. Never throws. */
 export async function getAuth(): Promise<SessionContext | null> {
+  const token = readSessionToken();
+  // Local dev fallback (no-op unless NODE_ENV!=production AND no DB configured).
   try {
-    return await resolveSession(readSessionToken());
+    const dev = devResolve(token);
+    if (dev) return dev;
+  } catch {
+    /* ignore */
+  }
+  try {
+    return await resolveSession(token);
   } catch {
     return null;
   }

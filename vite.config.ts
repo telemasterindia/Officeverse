@@ -34,5 +34,13 @@ export default defineConfig({
     // nitro/vite builds from this
     server: { entry: "server" },
   },
-  vite: { plugins: [stripTsdSourceForR3F()] },
+  vite: {
+    plugins: [stripTsdSourceForR3F()],
+    // `@node-rs/argon2` ships a native `.node` addon the bundler cannot parse.
+    // src/server/password.ts already `await import()`s it lazily and falls back
+    // to `bcryptjs` if it cannot load, so keep it external — resolved at runtime
+    // on a Node host, gracefully skipped elsewhere.
+    ssr: { external: ["@node-rs/argon2", "bcryptjs"] },
+    build: { rollupOptions: { external: [/^@node-rs\/argon2/] } },
+  },
 });
