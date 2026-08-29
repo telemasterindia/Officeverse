@@ -93,7 +93,7 @@ export const convertFollowUpToLeadFn = createServerFn({ method: "POST" })
     return svc.convertFollowUpToLead(
       user,
       data.code,
-      data.to_closer_code,
+      data.to_closer_code ?? null,
       data.note ?? null,
       requestInfo(),
     );

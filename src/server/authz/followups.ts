@@ -4,14 +4,16 @@
  * PURE FUNCTIONS. No DB, no request. The service layer calls the `assert*`
  * wrappers before every mutation. The client security boundary lives here.
  *
- * OWNERSHIP MODEL (from the existing app):
- *   - A follow-up belongs to `ownerUserId` (a users.id). The owner is the
- *     agent (or closer) who created the callback and is NEVER reassigned.
- *   - Only the OWNER may read/edit/reschedule/complete/cancel/convert their
- *     follow-up, and only while it is active (status SCHEDULED).
- *   - admin/hr may READ any follow-up and its history, but are NOT granted
- *     owner-only actions (customer edit, reschedule, complete, cancel, convert)
- *     unless a future product rule says otherwise. (Reported as a decision.)
+ * OWNERSHIP MODEL (from the existing app + Phase-4 correction):
+ *   - A follow-up belongs to `ownerUserId` (a users.id) — the agent OR closer
+ *     who created the callback. NEVER reassigned.
+ *   - Only the OWNER may edit/reschedule/complete/cancel their follow-up, and
+ *     only while it is active (status SCHEDULED).
+ *   - CONVERT-to-Lead: the OWNER (agent or closer) may convert their own active
+ *     follow-up; ADMIN may convert any active follow-up. The resulting Lead's
+ *     ownership mirrors the follow-up owner's role (see conversionOwnershipPlan).
+ *   - admin/hr may READ any follow-up + its history. They are NOT granted the
+ *     other owner-only actions (customer edit, reschedule, complete, cancel).
  *   - Closers are not granted follow-up visibility just for being closers — only
  *     follow-ups they own. A converted Lead is governed by Lead authorization.
  */
@@ -80,15 +82,69 @@ export const canCancelFollowUp = (a: FollowUpActor, fu: FUOwnerStatus): Decision
   ownerActive(a, fu, "cancel");
 
 /**
- * Convert-to-Lead is owner + active AND requires the AGENT role: the resulting
- * Lead needs an agent of record (leads.agent_id is NOT NULL). A closer-owned
- * follow-up can be completed/cancelled but not converted. (Reported decision.)
+ * Convert-to-Lead — Phase-4 correction: BOTH agents and closers may convert
+ * their own active follow-up.
+ *   - agent owner  → resulting Lead's originating agent = that agent;
+ *                    a Closer must be selected (service enforces).
+ *   - closer owner → resulting Lead has NO originating agent (agent_id NULL);
+ *                    the SAME closer stays operationally responsible. No
+ *                    closer-selection step; selecting another closer is refused.
+ *   - admin        → may convert any follow-up; the resulting Lead's ownership
+ *                    mirrors the follow-up owner's model (service resolves it).
+ * A non-owner non-admin cannot convert someone else's follow-up.
  */
 export function canConvertFollowUp(a: FollowUpActor, fu: FUOwnerStatus): Decision {
-  const base = ownerActive(a, fu, "convert");
-  if (!base.ok) return base;
-  if (a.user.role !== "agent") {
-    return deny("Only an agent can convert a follow-up to a Lead", "closer_cannot_convert");
+  if (a.user.role === "admin") {
+    if (isTerminal(fu.status)) {
+      return deny(
+        `This follow-up is ${fu.status.toLowerCase()} and cannot be converted`,
+        fu.status === "CONVERTED" ? "already_converted" : "terminal",
+      );
+    }
+    if (fu.status !== "SCHEDULED") return deny("Follow-up is not in an active state", "not_active");
+    return GRANT;
+  }
+  return ownerActive(a, fu, "convert");
+}
+
+/* ------------------- conversion ownership (pure) ------------------ */
+
+export type OwnerRole = "agent" | "closer";
+export type ConversionOwnershipPlan =
+  { kind: "agent"; needsCloserSelection: true } | { kind: "closer"; keepSameCloser: true };
+
+/**
+ * How the resulting Lead is owned, given the FOLLOW-UP owner's role.
+ * (The follow-up owner's role — not the acting user's — decides this, so an
+ * admin converting a closer's follow-up still keeps it with that closer.)
+ */
+export function conversionOwnershipPlan(ownerRole: OwnerRole): ConversionOwnershipPlan {
+  return ownerRole === "agent"
+    ? { kind: "agent", needsCloserSelection: true }
+    : { kind: "closer", keepSameCloser: true };
+}
+
+/**
+ * Validate the client-supplied `to_closer_code` against the plan.
+ *   - agent  → a closer code is REQUIRED
+ *   - closer → a closer code must be ABSENT, or equal the follow-up owner's own
+ *              closer code (no reassignment)
+ */
+export function validateConversionCloser(
+  ownerRole: OwnerRole,
+  toCloserCode: string | null,
+  ownerCloserCode: string | null,
+): Decision {
+  if (ownerRole === "agent") {
+    return toCloserCode
+      ? GRANT
+      : deny("Agent conversion must select a Closer for the new Lead", "closer_required");
+  }
+  if (toCloserCode && toCloserCode !== ownerCloserCode) {
+    return deny(
+      "A closer's follow-up converts to a Lead that stays with that same closer",
+      "closer_cannot_reassign",
+    );
   }
   return GRANT;
 }

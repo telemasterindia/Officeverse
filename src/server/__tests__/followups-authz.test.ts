@@ -83,19 +83,31 @@ describe("owner-only active actions", () => {
   });
 });
 
-describe("convert (agent-only)", () => {
+describe("convert (Phase-4 correction: agent OR closer owner, plus admin)", () => {
   it("agent owner + SCHEDULED → allowed", () => {
     expect(canConvertFollowUp(agentOwner, fuScheduled)).toEqual({ ok: true });
   });
-  it("closer owner → closer_cannot_convert", () => {
-    expect(canConvertFollowUp(closerOwner, fuCloserScheduled)).toMatchObject({
+  it("closer owner + SCHEDULED → NOW allowed", () => {
+    expect(canConvertFollowUp(closerOwner, fuCloserScheduled)).toEqual({ ok: true });
+  });
+  it("admin may convert a follow-up they do not own", () => {
+    expect(canConvertFollowUp(admin, fuScheduled)).toEqual({ ok: true });
+    expect(canConvertFollowUp(admin, fuCloserScheduled)).toEqual({ ok: true });
+  });
+  it("another user cannot convert someone else's follow-up", () => {
+    expect(canConvertFollowUp(otherAgent, fuScheduled)).toMatchObject({
       ok: false,
-      code: "closer_cannot_convert",
+      code: "not_owner",
     });
   });
-  it("already-terminal follow-up → rejected", () => {
+  it("already-terminal follow-up → rejected (admin path reports already_converted)", () => {
     expect(canConvertFollowUp(agentOwner, fuConverted).ok).toBe(false);
     expect(canConvertFollowUp(agentOwner, fuCompleted).ok).toBe(false);
+    expect(canConvertFollowUp(admin, fuConverted)).toMatchObject({
+      ok: false,
+      code: "already_converted",
+    });
+    expect(canConvertFollowUp(admin, fuCompleted)).toMatchObject({ ok: false, code: "terminal" });
   });
 });
 
@@ -178,12 +190,14 @@ describe("assert wrappers → HttpError", () => {
   it("admin create → 403", () => {
     expect(() => assertCanCreateFollowUp(admin)).toThrow(HttpError);
   });
-  it("closer convert → 403 closer_cannot_convert", () => {
+  it("closer convert of OWN follow-up → no throw; other user → 403 not_owner", () => {
+    expect(() => assertCanConvertFollowUp(closerOwner, fuCloserScheduled)).not.toThrow();
     try {
-      assertCanConvertFollowUp(closerOwner, fuCloserScheduled);
+      assertCanConvertFollowUp(otherAgent, fuScheduled);
       expect.unreachable();
     } catch (e) {
-      expect((e as HttpError).code).toBe("closer_cannot_convert");
+      expect((e as HttpError).status).toBe(403);
+      expect((e as HttpError).code).toBe("not_owner");
     }
   });
 });

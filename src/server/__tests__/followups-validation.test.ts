@@ -93,15 +93,20 @@ describe("rescheduleSchema", () => {
   });
 });
 
-describe("convertSchema", () => {
-  it("requires a valid closer code", () => {
+describe("convertSchema (Phase-4 correction: to_closer_code is optional)", () => {
+  it("accepts a valid closer code (agent conversion)", () => {
     expect(
       convertSchema.safeParse({ code: "FU_00004415", to_closer_code: "CL-00002" }).success,
     ).toBe(true);
+  });
+  it("accepts NO closer code (closer conversion — same closer stays)", () => {
+    expect(convertSchema.safeParse({ code: "FU_00004415" }).success).toBe(true);
+    expect(convertSchema.parse({ code: "FU_00004415" })).not.toHaveProperty("to_closer_code");
+  });
+  it("still rejects a malformed closer code when one is supplied", () => {
     expect(convertSchema.safeParse({ code: "FU_00004415", to_closer_code: "CL-2" }).success).toBe(
       false,
     );
-    expect(convertSchema.safeParse({ code: "FU_00004415" }).success).toBe(false);
   });
 });
 

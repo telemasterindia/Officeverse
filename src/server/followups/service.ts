@@ -16,8 +16,10 @@ import {
   assertCanRescheduleFollowUp,
   assertCanUpdateFollowUpCustomer,
   canTransition,
+  conversionOwnershipPlan,
   filterCustomerPatch,
   followUpScope,
+  validateConversionCloser,
   type FollowUpActor,
 } from "../authz/followups";
 import { HttpError } from "../http-error";
@@ -36,6 +38,7 @@ import * as leadsRepo from "../db/repos/leads";
 import {
   getAgentByUserId,
   getCloserByCode,
+  getCloserByUserId,
   loadAgentMeta,
   loadCloserMeta,
 } from "../db/repos/staff";
@@ -438,23 +441,57 @@ export interface ConvertResult {
 export async function convertFollowUpToLead(
   user: User,
   code: string,
-  toCloserCode: string,
+  toCloserCode: string | null,
   note: string | null,
   meta: Meta = {},
 ): Promise<ConvertResult> {
-  // Pre-transaction reads (no race): the converting user must be an agent with
-  // a profile (leads.agent_id is NOT NULL); the target closer must exist.
   const preRow = await repo.getFollowUpByCode(code);
   if (!preRow) throw new HttpError(404, "Follow-up not found", "not_found");
   assertCanConvertFollowUp(actorOf(user), preRow);
 
-  const agent = await getAgentByUserId(user.id);
-  if (!agent) {
-    throw new HttpError(409, "Your user has no agent profile", "no_agent_profile");
-  }
-  const closer = await getCloserByCode(toCloserCode);
-  if (!closer) {
-    throw new HttpError(404, `Closer ${toCloserCode} not found`, "closer_not_found");
+  // Resulting-Lead ownership is decided by the FOLLOW-UP owner's role, NOT the
+  // acting user's — so an admin converting a closer's follow-up still keeps it
+  // with that closer.
+  const plan = conversionOwnershipPlan(preRow.ownerRole);
+
+  let originatingAgentId: number | null = null;
+  let responsibleCloserId: number;
+  let responsibleCloserCode: string;
+
+  if (plan.kind === "agent") {
+    // The resulting Lead's originating agent = the follow-up owner's agent.
+    const ownerAgent = await getAgentByUserId(preRow.ownerUserId);
+    if (!ownerAgent) {
+      throw new HttpError(409, "The follow-up owner has no agent profile", "no_agent_profile");
+    }
+    const closerDecision = validateConversionCloser(preRow.ownerRole, toCloserCode ?? null, null);
+    if (!closerDecision.ok) {
+      throw new HttpError(400, closerDecision.reason, closerDecision.code);
+    }
+    const targetCloser = await getCloserByCode(toCloserCode!);
+    if (!targetCloser) {
+      throw new HttpError(404, `Closer ${toCloserCode} not found`, "closer_not_found");
+    }
+    originatingAgentId = ownerAgent.id;
+    responsibleCloserId = targetCloser.id;
+    responsibleCloserCode = targetCloser.closerCode;
+  } else {
+    // Closer conversion — the SAME closer keeps operational responsibility.
+    const ownerCloser = await getCloserByUserId(preRow.ownerUserId);
+    if (!ownerCloser) {
+      throw new HttpError(409, "The follow-up owner has no closer profile", "no_closer_profile");
+    }
+    const closerDecision = validateConversionCloser(
+      preRow.ownerRole,
+      toCloserCode ?? null,
+      ownerCloser.closerCode,
+    );
+    if (!closerDecision.ok) {
+      throw new HttpError(400, closerDecision.reason, closerDecision.code);
+    }
+    originatingAgentId = null;
+    responsibleCloserId = ownerCloser.id;
+    responsibleCloserCode = ownerCloser.closerCode;
   }
 
   const now = nowIST();
@@ -490,8 +527,8 @@ export async function convertFollowUpToLead(
             currentDebts: row.currentDebts ?? "Current",
             leadFile: null,
             comments: row.comment,
-            agentId: agent.id,
-            assignedCloserId: closer.id,
+            agentId: originatingAgentId, // null for a closer-owned conversion
+            assignedCloserId: responsibleCloserId,
             status: "ASSIGNED",
             source: "conversion",
             convertedFromFollowUpId: row.id,
@@ -511,10 +548,13 @@ export async function convertFollowUpToLead(
       {
         leadId: lead.id,
         fromCloserId: null,
-        toCloserId: closer.id,
+        toCloserId: responsibleCloserId,
         action: "assign",
         byUserId: user.id,
-        note: null,
+        note:
+          plan.kind === "closer"
+            ? `Kept with the same closer on conversion of ${row.followUpCode}`
+            : `Converted from ${row.followUpCode}`,
         createdAt: now,
       },
       tx,
@@ -549,7 +589,9 @@ export async function convertFollowUpToLead(
     entityCode: result.freshFu.followUpCode,
     metadata: {
       lead_id: result.lead.leadCode,
-      to_closer_code: toCloserCode,
+      owner_role: preRow.ownerRole,
+      responsible_closer_code: responsibleCloserCode,
+      kept_with_owner_closer: plan.kind === "closer",
       ...(note ? { note } : {}),
     },
     ip: meta.ip ?? null,
@@ -565,23 +607,27 @@ export async function convertFollowUpToLead(
     metadata: {
       source: "conversion",
       from_follow_up: result.freshFu.followUpCode,
-      to_closer_code: toCloserCode,
+      owner_role: preRow.ownerRole,
+      originating_agent: originatingAgentId != null,
+      responsible_closer_code: responsibleCloserCode,
     },
     ip: meta.ip ?? null,
     userAgent: meta.userAgent ?? null,
   });
 
   const [agentMeta, closerMeta] = await Promise.all([
-    loadAgentMeta([agent.id]),
-    loadCloserMeta([closer.id]),
+    loadAgentMeta(originatingAgentId != null ? [originatingAgentId] : []),
+    loadCloserMeta([responsibleCloserId]),
   ]);
   return {
     followUp: await hydrateOne(result.freshFu),
     lead: toLeadDTO(result.lead, {
-      agentCode: agentMeta.get(agent.id)?.code ?? null,
-      agentName: agentMeta.get(agent.id)?.name ?? null,
-      closerCode: closerMeta.get(closer.id)?.code ?? null,
-      closerName: closerMeta.get(closer.id)?.name ?? null,
+      agentCode:
+        originatingAgentId != null ? (agentMeta.get(originatingAgentId)?.code ?? null) : null,
+      agentName:
+        originatingAgentId != null ? (agentMeta.get(originatingAgentId)?.name ?? null) : null,
+      closerCode: closerMeta.get(responsibleCloserId)?.code ?? null,
+      closerName: closerMeta.get(responsibleCloserId)?.name ?? null,
     }),
   };
 }

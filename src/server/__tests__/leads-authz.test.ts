@@ -33,6 +33,8 @@ const closerY: LeadActor = { user: { id: 21, role: "closer" }, agentId: null, cl
 const leadNew = { agentId: 100, assignedCloserId: null, status: "NEW" } as const;
 const leadAssignedToX = { agentId: 100, assignedCloserId: 200, status: "ASSIGNED" } as const;
 const leadAcceptedByX = { agentId: 100, assignedCloserId: 200, status: "ACCEPTED" } as const;
+/** Phase-4: a lead created by converting a CLOSER-owned follow-up — no originating agent. */
+const leadCloserOriginated = { agentId: null, assignedCloserId: 200, status: "ASSIGNED" } as const;
 
 describe("canReadLead", () => {
   it("admin & hr read any lead", () => {
@@ -169,6 +171,38 @@ describe("canSetLeadStatus (transition rules)", () => {
       ok: false,
       code: "role_forbidden",
     });
+  });
+});
+
+describe("Phase-4: closer-originated Lead (agent_id NULL) works normally for its closer", () => {
+  it("assigned closer can read + update it", () => {
+    expect(canReadLead(closerX, leadCloserOriginated)).toBe(true);
+    expect(canUpdateLead(closerX, leadCloserOriginated)).toEqual({ ok: true });
+  });
+  it("no agent can see or edit it (agent_id is NULL)", () => {
+    expect(canReadLead(agentA, leadCloserOriginated)).toBe(false);
+    expect(canUpdateLead(agentA, leadCloserOriginated)).toMatchObject({ ok: false });
+  });
+  it("its closer can drive it through the existing lifecycle (Sale / Reject / Dispose)", () => {
+    // the assigned closer may update it at all
+    expect(canUpdateLead(closerX, leadCloserOriginated)).toEqual({ ok: true });
+    // Reject
+    expect(canSetLeadStatus(closerX, leadCloserOriginated, "REJECTED")).toEqual({ ok: true });
+    // Sale / accept → then complete
+    expect(canSetLeadStatus(closerX, leadCloserOriginated, "ACCEPTED")).toEqual({ ok: true });
+    expect(
+      canSetLeadStatus(closerX, { ...leadCloserOriginated, status: "ACCEPTED" }, "COMPLETED"),
+    ).toEqual({ ok: true });
+  });
+  it("a DIFFERENT closer cannot act on it (ownership enforced by canUpdateLead)", () => {
+    expect(canUpdateLead(closerY, leadCloserOriginated)).toMatchObject({
+      ok: false,
+      code: "not_assignee",
+    });
+  });
+  it("admin still sees it; hydrate-safe (agent code resolves to null)", () => {
+    expect(canReadLead(admin, leadCloserOriginated)).toBe(true);
+    expect(leadScope(closerX)).toEqual({ kind: "closer", closerId: 200 });
   });
 });
 

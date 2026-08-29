@@ -1,0 +1,1 @@
+ALTER TABLE `leads` MODIFY COLUMN `agent_id` int unsigned;

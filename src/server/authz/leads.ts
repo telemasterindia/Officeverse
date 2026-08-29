@@ -6,11 +6,15 @@
  * the server-side security boundary; the service layer calls the `assert*`
  * wrappers before every repository mutation. RoleGate on the client is UX only.
  *
- * Ownership model (from the existing app + Phase-1 schema):
- *   - `leads.agentId` is the SUBMITTING agent and is immutable.
- *   - `leads.assignedCloserId` is the current closer (null until transferred).
+ * Ownership model (from the existing app + Phase-1/4 schema):
+ *   - `leads.agentId` is the ORIGINATING agent and is immutable. It is NULL for
+ *     a lead produced by converting a closer-owned follow-up (no agent involved).
+ *   - `leads.assignedCloserId` is the OPERATIONAL closer (null until an agent
+ *     transfers it; set immediately when a closer's follow-up converts).
  *   - A lead that has a closer (assignedCloserId != null, i.e. status != NEW) is
- *     TRANSFERRED and becomes READ-ONLY to the submitting agent.
+ *     TRANSFERRED and becomes READ-ONLY to the originating agent.
+ *   - Closer authorization keys entirely off `assignedCloserId`, so a
+ *     null-agent (closer-originated) lead works normally for its closer.
  */
 import { HttpError } from "../http-error";
 import type { Lead, User } from "@/lib/db/schema";

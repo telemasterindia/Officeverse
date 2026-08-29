@@ -47,7 +47,8 @@ type Meta = { ip?: string | null; userAgent?: string | null };
 
 async function hydrate(rows: Lead[]): Promise<LeadDTO[]> {
   if (!rows.length) return [];
-  const agentIds = [...new Set(rows.map((r) => r.agentId))];
+  // agentId is nullable (a closer-owned follow-up converts with no originating agent).
+  const agentIds = [...new Set(rows.map((r) => r.agentId).filter((x): x is number => x != null))];
   const closerIds = [
     ...new Set(rows.map((r) => r.assignedCloserId).filter((x): x is number => x != null)),
   ];
@@ -57,8 +58,8 @@ async function hydrate(rows: Lead[]): Promise<LeadDTO[]> {
   ]);
   return rows.map((r) =>
     toLeadDTO(r, {
-      agentCode: agentMeta.get(r.agentId)?.code ?? null,
-      agentName: agentMeta.get(r.agentId)?.name ?? null,
+      agentCode: r.agentId != null ? (agentMeta.get(r.agentId)?.code ?? null) : null,
+      agentName: r.agentId != null ? (agentMeta.get(r.agentId)?.name ?? null) : null,
       closerCode:
         r.assignedCloserId != null ? (closerMeta.get(r.assignedCloserId)?.code ?? null) : null,
       closerName:

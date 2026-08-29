@@ -164,22 +164,26 @@ function FollowUpRecordPage() {
     navigate({ to: "/followups" });
   };
 
+  // A closer's follow-up converts to a Lead that STAYS with that same closer —
+  // no closer-selection step. An agent's follow-up requires picking a closer.
+  const isCloserOwned = fu.owner_role === "closer";
   const doConvert = () => {
-    if (!convCloser) return;
+    if (!isCloserOwned && !convCloser) return;
     const res = convertFollowUpToLead(fu.follow_up_id, {
-      closer: convCloser,
+      ...(convCloser ? { closer: convCloser } : {}),
       actor: user.name,
       process: user.process,
     });
     if (!res) return;
+    const dest = res.lead.assigned_closer;
     addNotification({
       category: "Leads",
       title: "Follow-up converted to Lead",
-      body: `${res.lead.customer_name} · ${res.lead.lead_id} — transferred to ${convCloser}`,
+      body: isCloserOwned
+        ? `${res.lead.customer_name} · ${res.lead.lead_id} — stays with ${dest}`
+        : `${res.lead.customer_name} · ${res.lead.lead_id} — assigned to ${dest}`,
     });
-    toast("✅ Converted & assigned", {
-      description: `${res.lead.lead_id} → ${convCloser}`,
-    });
+    toast("✅ Converted", { description: `${res.lead.lead_id} → ${dest}` });
     navigate({ to: "/leads/$leadId", params: { leadId: res.lead.lead_id } });
   };
 
@@ -319,27 +323,42 @@ function FollowUpRecordPage() {
       {mode === "convert" ? (
         <SectionCard
           title="Convert to Lead"
-          description="The customer information below is used as-is — no duplicate customer is created. The follow-up closes and the Lead is transferred to the Closer you pick."
+          description={
+            isCloserOwned
+              ? "The customer information below is used as-is — no duplicate customer is created. The follow-up closes and the Lead stays with you as the responsible closer."
+              : "The customer information below is used as-is — no duplicate customer is created. The follow-up closes and the Lead is assigned to the Closer you pick."
+          }
         >
           <div className="grid max-w-md gap-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="conv-closer">Transfer to Closer</Label>
-              <Select value={convCloser} onValueChange={setConvCloser}>
-                <SelectTrigger id="conv-closer">
-                  <SelectValue placeholder="Select Closer" />
-                </SelectTrigger>
-                <SelectContent>
-                  {CLOSERS.map((cl) => (
-                    <SelectItem key={cl} value={cl}>
-                      {cl}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+            {isCloserOwned ? (
+              <p className="rounded-lg border border-border bg-secondary/40 p-3 text-sm text-muted-foreground">
+                This Lead will stay with <strong>you</strong> ({fu.owner_name}). It does not go to
+                another closer.
+              </p>
+            ) : (
+              <div className="space-y-1.5">
+                <Label htmlFor="conv-closer">Assign to Closer</Label>
+                <Select value={convCloser} onValueChange={setConvCloser}>
+                  <SelectTrigger id="conv-closer">
+                    <SelectValue placeholder="Select Closer" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {CLOSERS.map((cl) => (
+                      <SelectItem key={cl} value={cl}>
+                        {cl}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <div className="flex gap-2">
-              <Button className="rounded-lg" onClick={doConvert} disabled={!convCloser}>
-                Convert &amp; Assign Lead
+              <Button
+                className="rounded-lg"
+                onClick={doConvert}
+                disabled={!isCloserOwned && !convCloser}
+              >
+                {isCloserOwned ? "Convert to Lead" : "Convert & Assign Lead"}
               </Button>
               <Button variant="ghost" className="rounded-lg" onClick={() => setMode("view")}>
                 Cancel

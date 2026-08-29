@@ -114,7 +114,12 @@ export const cancelSchema = z.object({ code: followUpCodeSchema, reason: note })
 
 export const convertSchema = z.object({
   code: followUpCodeSchema,
-  to_closer_code: closerCodeSchema,
+  /**
+   * Required for AGENT-owned conversions (pick the Closer). Omitted for
+   * CLOSER-owned conversions (the same closer stays responsible). The service
+   * enforces the required/forbidden rule by the follow-up owner's role.
+   */
+  to_closer_code: closerCodeSchema.optional(),
   note,
 });
 export type ConvertInput = z.infer<typeof convertSchema>;

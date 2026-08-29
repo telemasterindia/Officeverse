@@ -626,7 +626,7 @@ export function rescheduleFollowUp(
  */
 export function convertFollowUpToLead(
   id: string,
-  opts: { closer: string; actor: string; process?: ProcessCode },
+  opts: { closer?: string; actor: string; process?: ProcessCode },
 ): { follow_up: FollowUpRecord; lead: Lead } | null {
   const list = loadStore();
   const i = list.findIndex((f) => f.follow_up_id === id);
@@ -637,6 +637,10 @@ export function convertFollowUpToLead(
     if (existing) return { follow_up: cur, lead: existing };
   }
   const c = cur.customer;
+  // Closer-owned follow-up → the SAME closer stays operationally responsible.
+  // Agent-owned follow-up → the agent picks a closer.
+  const responsibleCloser =
+    cur.owner_role === "closer" ? (opts.closer ?? cur.owner_name) : (opts.closer ?? "");
   const lead = createLead({
     customer_name: c.full_name,
     email: c.email,
@@ -653,10 +657,14 @@ export function convertFollowUpToLead(
       : {}),
     comment: c.comment,
     submitted_by: cur.created_by,
-    assigned_closer: opts.closer,
+    assigned_closer: responsibleCloser,
     ...(opts.process ? { process: opts.process } : {}),
   });
   const now = new Date().toISOString();
+  const convNote =
+    cur.owner_role === "closer"
+      ? `Converted to Lead ${lead.lead_id} — stays with ${responsibleCloser} (closer follow-up) by ${opts.actor}`
+      : `Converted to Lead ${lead.lead_id} — transferred to ${responsibleCloser} by ${opts.actor}`;
   const next: FollowUpRecord = {
     ...cur,
     status: "CONVERTED",
@@ -668,7 +676,7 @@ export function convertFollowUpToLead(
       {
         scheduled_at: cur.scheduled_at,
         outcome: "COMPLETED",
-        note: `Converted to Lead ${lead.lead_id} — transferred to ${opts.closer} by ${opts.actor}`,
+        note: convNote,
         recorded_at: now,
       },
     ],

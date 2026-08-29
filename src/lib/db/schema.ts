@@ -368,11 +368,21 @@ export const leads = mysqlTable(
     leadFile: varchar("lead_file", { length: 200 }),
     comments: text("comments"),
 
-    /** submitting agent (Phase 2 — agent sees only their own) */
-    agentId: int("agent_id", { unsigned: true })
-      .notNull()
-      .references(() => agents.id, { onDelete: "restrict", onUpdate: "cascade" }),
-    /** assigned/transferred closer — null until transfer (Phase 2) */
+    /**
+     * ORIGINATING agent — the agent who submitted the lead. Nullable: a lead
+     * created by CONVERTING a closer-owned follow-up has no originating agent
+     * (the closer is operationally responsible via `assignedCloserId`).
+     * Agent lead-visibility / reporting keys off this column.
+     */
+    agentId: int("agent_id", { unsigned: true }).references(() => agents.id, {
+      onDelete: "restrict",
+      onUpdate: "cascade",
+    }),
+    /**
+     * OPERATIONAL closer responsible for the lead — null until an agent
+     * transfers it; set immediately when a closer-owned follow-up converts
+     * (and stays with that same closer — never reassigned by conversion).
+     */
     assignedCloserId: int("assigned_closer_id", { unsigned: true }).references(() => closers.id, {
       onDelete: "set null",
       onUpdate: "cascade",
