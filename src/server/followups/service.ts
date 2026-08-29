@@ -7,6 +7,7 @@
  * audit → return a client-safe DTO. Owner is ALWAYS the session user.
  */
 import { recordAudit } from "../audit";
+import { emitFollowUpEvent } from "../notifications/events";
 import {
   assertCanCancelFollowUp,
   assertCanCompleteFollowUp,
@@ -241,6 +242,10 @@ export async function createFollowUp(
     recordedByUserId: user.id,
   });
 
+  // Phase 5: scheduling a follow-up is NOT a reminder. No notification / email
+  // job is created at creation time — the future scheduler decides when a
+  // time-based reminder is generated from active SCHEDULED follow-ups.
+
   await recordAudit({
     actorUserId: user.id,
     actorRole: user.role,
@@ -326,12 +331,13 @@ export async function rescheduleFollowUp(
     ? input.expected_scheduled_at.replace("T", " ").replace("+05:30", "").trim()
     : undefined;
 
-  const updatedRow = await getDb().transaction(async (tx) => {
+  const { fresh: updatedRow, previousScheduledAt } = await getDb().transaction(async (tx) => {
     const row = await repo.getFollowUpByCodeForUpdate(code, tx);
     if (!row) throw new HttpError(404, "Follow-up not found", "not_found");
     assertCanRescheduleFollowUp(actorOf(user), row);
     const legal = canTransition(row.status, "reschedule");
     if (!legal.ok) throw new HttpError(422, legal.reason, legal.code);
+    const previousScheduledAt = row.scheduledAt;
 
     if (expected && row.scheduledAt.replace(/:\d{2}$/, "") !== expected.replace(/:\d{2}$/, "")) {
       throw new HttpError(409, "The follow-up schedule changed since you loaded it", "stale");
@@ -376,7 +382,22 @@ export async function rescheduleFollowUp(
       ip: meta.ip ?? null,
       userAgent: meta.userAgent ?? null,
     });
-    return fresh!;
+    return { fresh: fresh!, previousScheduledAt };
+  });
+
+  await emitFollowUpEvent({
+    kind: "rescheduled",
+    followUpCode: updatedRow.followUpCode,
+    followUpId: updatedRow.id,
+    ownerUserId: updatedRow.ownerUserId,
+    scheduledAt: newScheduledAt,
+    previousScheduledAt,
+    customerName: updatedRow.customerName,
+    reason,
+    actorUserId: user.id,
+    actorRole: user.role,
+    ip: meta.ip ?? null,
+    userAgent: meta.userAgent ?? null,
   });
 
   return hydrateOne(updatedRow);
@@ -423,6 +444,20 @@ async function terminate(
     return (await repo.getFollowUpById(row.id, tx))!;
   });
 
+  await emitFollowUpEvent({
+    kind: action === "complete" ? "completed" : "cancelled",
+    followUpCode: updatedRow.followUpCode,
+    followUpId: updatedRow.id,
+    ownerUserId: updatedRow.ownerUserId,
+    scheduledAt: updatedRow.scheduledAt,
+    customerName: updatedRow.customerName,
+    reason: note,
+    actorUserId: user.id,
+    actorRole: user.role,
+    ip: meta.ip ?? null,
+    userAgent: meta.userAgent ?? null,
+  });
+
   return hydrateOne(updatedRow);
 }
 
@@ -457,6 +492,7 @@ export async function convertFollowUpToLead(
   let originatingAgentId: number | null = null;
   let responsibleCloserId: number;
   let responsibleCloserCode: string;
+  let responsibleCloserUserId: number;
 
   if (plan.kind === "agent") {
     // The resulting Lead's originating agent = the follow-up owner's agent.
@@ -475,6 +511,7 @@ export async function convertFollowUpToLead(
     originatingAgentId = ownerAgent.id;
     responsibleCloserId = targetCloser.id;
     responsibleCloserCode = targetCloser.closerCode;
+    responsibleCloserUserId = targetCloser.userId;
   } else {
     // Closer conversion — the SAME closer keeps operational responsibility.
     const ownerCloser = await getCloserByUserId(preRow.ownerUserId);
@@ -492,6 +529,7 @@ export async function convertFollowUpToLead(
     originatingAgentId = null;
     responsibleCloserId = ownerCloser.id;
     responsibleCloserCode = ownerCloser.closerCode;
+    responsibleCloserUserId = ownerCloser.userId;
   }
 
   const now = nowIST();
@@ -611,6 +649,23 @@ export async function convertFollowUpToLead(
       originating_agent: originatingAgentId != null,
       responsible_closer_code: responsibleCloserCode,
     },
+    ip: meta.ip ?? null,
+    userAgent: meta.userAgent ?? null,
+  });
+
+  await emitFollowUpEvent({
+    kind: "converted",
+    followUpCode: result.freshFu.followUpCode,
+    followUpId: result.freshFu.id,
+    ownerUserId: result.freshFu.ownerUserId,
+    scheduledAt: result.freshFu.scheduledAt,
+    customerName: result.freshFu.customerName,
+    leadCode: result.lead.leadCode,
+    leadId: result.lead.id,
+    responsibleCloserUserId,
+    source: "conversion",
+    actorUserId: user.id,
+    actorRole: user.role,
     ip: meta.ip ?? null,
     userAgent: meta.userAgent ?? null,
   });

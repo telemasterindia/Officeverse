@@ -95,7 +95,30 @@ export const CURRENT_DEBTS = ["Current", "Late"] as const;
 
 export const CLIENT_STATUSES = ["active", "prospect", "inactive", "closed"] as const;
 
-export const EMAIL_KINDS = ["closer-followup", "shift-summary"] as const;
+/**
+ * Email template identifiers (Phase 5). EXTENSIBLE: add an id here + a renderer
+ * in src/server/email/templates.ts — no enum migration needed because the
+ * column is a plain varchar (mirrors `notifications.type`). Full email HTML is
+ * never stored in business logic; the template registry renders it.
+ */
+export const EMAIL_TEMPLATES = [
+  "FOLLOW_UP_REMINDER",
+  "FOLLOW_UP_RESCHEDULED",
+  "LEAD_ASSIGNED",
+  "LEAD_STATUS_CHANGED",
+  "SYSTEM_NOTIFICATION",
+  // legacy outbox identifiers (pre-Phase-5 client renderers)
+  "closer-followup",
+  "shift-summary",
+] as const;
+export type EmailTemplateId = (typeof EMAIL_TEMPLATES)[number];
+/**
+ * queued      → waiting for a worker (also where a retryable failure returns to,
+ *               with a future next_attempt_at back-off)
+ * processing  → claimed/leased by a worker (locked_at / locked_by set)
+ * sent        → delivered (terminal)
+ * failed      → gave up after max_retries (terminal, NEVER deleted — auditable)
+ */
 export const EMAIL_STATUSES = ["queued", "processing", "sent", "failed"] as const;
 
 export const IMPORT_TYPES = ["leads", "follow_ups", "workbook"] as const;
@@ -494,11 +517,16 @@ export const notifications = mysqlTable(
   "notifications",
   {
     id: int("id", { unsigned: true }).autoincrement().primaryKey(),
+    /** recipient — ALWAYS resolved server-side, never taken from a client body */
     recipientUserId: int("recipient_user_id", { unsigned: true })
       .notNull()
       .references(() => users.id, { onDelete: "cascade", onUpdate: "cascade" }),
-    /** e.g. followup.reminder.15 | followup.reminder.3 | followup.reminder.1
-     *       | lead.assigned | followup.rescheduled | followup.converted */
+    /**
+     * event type (varchar so new events need no migration), e.g.
+     *   followup.reminder | followup.overdue | followup.rescheduled
+     *   followup.converted | followup.completed | followup.cancelled
+     *   lead.assigned | lead.transferred | lead.status_changed | system
+     */
     type: varchar("type", { length: 60 }).notNull(),
     title: varchar("title", { length: 255 }).notNull(),
     message: varchar("message", { length: 1000 }).notNull(),
@@ -506,13 +534,21 @@ export const notifications = mysqlTable(
     relatedEntityId: int("related_entity_id", { unsigned: true }),
     relatedEntityCode: varchar("related_entity_code", { length: 32 }),
     readAt: dt("read_at"),
-    /** DB-level idempotency (Phase 4/5) — e.g. followup:<id>:15:<scheduled_at> */
+    /** structured context for the future scheduler (reminder threshold,
+     *  scheduled occurrence…). MUST NOT contain secrets or unnecessary PII. */
+    metadata: json("metadata"),
+    /**
+     * DB-level idempotency (Phase 4/5). Derived from the BUSINESS EVENT, never
+     * from "now" — e.g. followup:FU_00004415:reminder:2026-08-29T22:00. NULL is
+     * allowed for one-off notifications (MySQL lets multiple NULLs coexist in a
+     * UNIQUE index). Re-running the scheduler with the same key is a no-op.
+     */
     dedupeKey: varchar("dedupe_key", { length: 191 }),
     createdAt: dt("created_at").notNull(),
   },
   (t) => ({
     dedupeUq: unique("notifications_dedupe_uq").on(t.dedupeKey),
-    recipientIdx: index("notifications_recipient_idx").on(t.recipientUserId),
+    recipientIdx: index("notifications_recipient_idx").on(t.recipientUserId, t.createdAt),
     unreadIdx: index("notifications_unread_idx").on(t.recipientUserId, t.readAt),
   }),
 );
@@ -525,39 +561,53 @@ export const emailJobs = mysqlTable(
   "email_jobs",
   {
     id: int("id", { unsigned: true }).autoincrement().primaryKey(),
-    kind: mysqlEnum("kind", EMAIL_KINDS).notNull(),
+    /** template identifier — see EMAIL_TEMPLATES / src/server/email/templates.ts */
+    kind: varchar("kind", { length: 60 }).notNull(),
     toEmail: varchar("to_email", { length: 191 }).notNull(),
     toName: varchar("to_name", { length: 200 }),
+    /** recipient user when known — resolved server-side, never from a client body */
     toUserId: int("to_user_id", { unsigned: true }).references(() => users.id, {
       onDelete: "set null",
       onUpdate: "cascade",
     }),
     subject: varchar("subject", { length: 500 }).notNull(),
-    bodyText: mediumtext("body_text").notNull(),
+    /** rendered bodies — nullable so a future worker MAY render lazily from `payload` */
+    bodyText: mediumtext("body_text"),
     bodyHtml: mediumtext("body_html"),
+    /** structured template data — kept so the future worker can (re)render */
+    payload: json("payload"),
     relatedEntityType: varchar("related_entity_type", { length: 40 }),
     relatedEntityId: int("related_entity_id", { unsigned: true }),
-    /** required unique — one follow-up/one shift never queues twice (Phase 6) */
+    /**
+     * required UNIQUE idempotency key, derived from the business event
+     * (e.g. followup:FU_00004415:reminder:2026-08-29T22:00:email). Enqueuing
+     * the same event twice is a no-op.
+     */
     dedupeKey: varchar("dedupe_key", { length: 191 }).notNull(),
     status: mysqlEnum("status", EMAIL_STATUSES).notNull().default("queued"),
+    /** attempts consumed (incremented when a worker CLAIMS the job) */
     retryCount: int("retry_count", { unsigned: true }).notNull().default(0),
     maxRetries: int("max_retries", { unsigned: true }).notNull().default(5),
+    /** earliest instant a worker may (re)attempt — a.k.a. available_at */
     nextAttemptAt: dt("next_attempt_at").notNull(),
-    /** for the pre-shift summary — do not send before this instant */
+    /** hard "do not send before" (pre-scheduled summaries) */
     scheduledFor: dt("scheduled_for"),
     provider: varchar("provider", { length: 40 }),
     providerMessageId: varchar("provider_message_id", { length: 255 }),
     errorMessage: varchar("error_message", { length: 1000 }),
-    /** worker claim — prevents a concurrent drain from double-sending */
+    /** worker claim/lease — a stale lock (locked_at older than the lease) is recoverable */
     lockedAt: dt("locked_at"),
     lockedBy: varchar("locked_by", { length: 80 }),
     sentAt: dt("sent_at"),
+    failedAt: dt("failed_at"),
     createdAt: dt("created_at").notNull(),
     updatedAt: dt("updated_at").notNull(),
   },
   (t) => ({
     dedupeUq: unique("email_jobs_dedupe_uq").on(t.dedupeKey),
     drainIdx: index("email_jobs_drain_idx").on(t.status, t.nextAttemptAt),
+    leaseIdx: index("email_jobs_lease_idx").on(t.status, t.lockedAt),
+    toUserIdx: index("email_jobs_to_user_idx").on(t.toUserId),
   }),
 );
 
@@ -818,7 +868,9 @@ export type NewFollowUp = typeof followUps.$inferInsert;
 export type FollowUpAttempt = typeof followUpAttempts.$inferSelect;
 export type NewFollowUpAttempt = typeof followUpAttempts.$inferInsert;
 export type Notification = typeof notifications.$inferSelect;
+export type NewNotification = typeof notifications.$inferInsert;
 export type EmailJob = typeof emailJobs.$inferSelect;
+export type NewEmailJob = typeof emailJobs.$inferInsert;
 export type AuditLog = typeof auditLogs.$inferSelect;
 export type ImportBatch = typeof imports.$inferSelect;
 export type ImportRow = typeof importRows.$inferSelect;

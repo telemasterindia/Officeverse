@@ -4,8 +4,8 @@
  * All DB access for `users` goes through here so the service layer never builds
  * raw SQL and so column selection can exclude `password_hash` by default.
  */
-import { eq, sql } from "drizzle-orm";
-import { getDb } from "@/lib/db";
+import { eq, inArray, sql } from "drizzle-orm";
+import { getDb, type DBX } from "@/lib/db";
 import { staffPhotos, users, type User } from "@/lib/db/schema";
 import { nowIST } from "../../time";
 
@@ -74,6 +74,28 @@ export async function setPasswordHash(id: number, passwordHash: string): Promise
     .update(users)
     .set({ passwordHash, mustChangePassword: false, updatedAt: ts })
     .where(eq(users.id, id));
+}
+
+export interface UserContact {
+  id: number;
+  email: string;
+  fullName: string;
+}
+
+/** Batch-load email + name for a set of user ids (notification/email routing). */
+export async function loadUserContacts(
+  ids: number[],
+  ex: DBX = getDb(),
+): Promise<Map<number, UserContact>> {
+  const map = new Map<number, UserContact>();
+  const unique = [...new Set(ids)].filter((n) => Number.isFinite(n));
+  if (!unique.length) return map;
+  const rows = await ex
+    .select({ id: users.id, email: users.email, fullName: users.fullName })
+    .from(users)
+    .where(inArray(users.id, unique));
+  for (const r of rows) map.set(r.id, r);
+  return map;
 }
 
 export async function countUsers(): Promise<number> {

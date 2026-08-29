@@ -75,3 +75,58 @@ export function leadAssignedDedupeKey(
 ): string {
   return `lead:${leadRef}:assigned:${closerRef}`;
 }
+
+/* --------------------- Phase 5: event-driven dedupe -------------------- *
+ * Every key below is derived ONLY from the business event (entity code +
+ * event name + a stable "occurrence" token such as the scheduled instant or
+ * the shift date). NEVER from `Date.now()`. Re-running the scheduler / a
+ * retried worker therefore lands on the SAME key and is a no-op.
+ * ------------------------------------------------------------------------ */
+
+/** Follow-up lifecycle events an integration point emits (not time-based reminders). */
+export const FOLLOW_UP_EVENTS = [
+  "rescheduled",
+  "converted",
+  "completed",
+  "cancelled",
+  "reminder",
+  "overdue",
+] as const;
+export type FollowUpEvent = (typeof FOLLOW_UP_EVENTS)[number];
+
+/**
+ * Canonical notification idempotency key.
+ *   notif:<type>:<entityRef>:<occurrence>
+ * `occurrence` MUST be event-derived (a scheduled wall-clock, a shift date, a
+ * target user code…), never the current time.
+ */
+export function notificationDedupeKey(
+  type: string,
+  entityRef: string | number,
+  occurrence: string | number,
+): string {
+  return `notif:${type}:${entityRef}:${String(occurrence).trim()}`;
+}
+
+/**
+ * Follow-up event key: followup:<code>:<event>:<occurrence>. The follow-up CODE
+ * is stable across reschedules (the record keeps its id), so a reschedule only
+ * changes `occurrence` (the new scheduled instant) and correctly yields a new
+ * key while completed/cancelled/converted keep their own terminal keys.
+ */
+export function followUpEventDedupeKey(
+  event: FollowUpEvent,
+  followUpCode: string,
+  occurrence: string,
+): string {
+  return `followup:${followUpCode}:${event}:${occurrence.trim()}`;
+}
+
+/**
+ * The matching EMAIL job key for any notification/event key: the same key with
+ * a `:email` suffix (spec: followup:FU_…:reminder:<at>  →  …:email). One event
+ * therefore yields at most one notification AND at most one email job.
+ */
+export function emailDedupeKey(eventKey: string): string {
+  return eventKey.endsWith(":email") ? eventKey : `${eventKey}:email`;
+}
