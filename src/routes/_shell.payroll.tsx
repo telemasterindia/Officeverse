@@ -21,10 +21,13 @@ import {
   useAdminSalarySlips,
   useDownloadSalarySlip,
   useGenerateSalarySlip,
+  useMonthlyDeliveryPreview,
   useMySalarySlips,
+  useRunMonthlyDelivery,
   useSalarySlipHistory,
   useSendSalarySlip,
   type AdminSlipFilters,
+  type ProcessCode as SlipProcessCode,
 } from "@/lib/officeverse/use-salary-slip";
 import { useSession } from "@/lib/officeverse/session";
 import { cn } from "@/lib/utils";
@@ -75,6 +78,7 @@ function PayrollPage() {
           <CalculateForm />
           <ManagerPayroll />
           <ManagerSalarySlips />
+          <MonthlyDelivery />
         </>
       ) : (
         <>
@@ -815,6 +819,173 @@ function ManagerSalarySlips() {
         </div>
       ) : null}
     </SectionCard>
+  );
+}
+
+/* ================== monthly salary-slip delivery ============ */
+
+interface DeliverySummary {
+  month: string;
+  process: string | null;
+  dryRun: boolean;
+  totalPayrollRuns: number;
+  skippedNonLocked: number;
+  lockedEligible: number;
+  missingEmail: number;
+  generated: number;
+  alreadyGenerated: number;
+  wouldGenerate: number;
+  sent: number;
+  alreadySent: number;
+  wouldSend: number;
+  failed: number;
+  failures: { userId: number; salarySlipId?: number; reason: string }[];
+}
+
+function MonthlyDelivery() {
+  const [month, setMonth] = useState(thisMonth());
+  const [proc, setProc] = useState<"" | SlipProcessCode>("");
+  const [summary, setSummary] = useState<DeliverySummary | null>(null);
+  const preview = useMonthlyDeliveryPreview();
+  const run = useRunMonthlyDelivery();
+  const busy = preview.isPending || run.isPending;
+
+  const payload = () => ({ month, ...(proc ? { process: proc as SlipProcessCode } : {}) });
+
+  const doPreview = () => {
+    if (!/^\d{4}-\d{2}$/.test(month)) {
+      toast.error("Pick a month");
+      return;
+    }
+    preview.mutate(payload(), {
+      onSuccess: (s) => {
+        setSummary(s as DeliverySummary);
+        toast.success("Dry run complete — no emails sent");
+      },
+      onError: (e) => toast.error(e.message || "Preview failed"),
+    });
+  };
+
+  const doRun = () => {
+    if (!/^\d{4}-\d{2}$/.test(month)) {
+      toast.error("Pick a month");
+      return;
+    }
+    if (!window.confirm(`Generate and email salary slips for LOCKED payroll in ${month}?`)) return;
+    run.mutate(payload(), {
+      onSuccess: (s) => {
+        setSummary(s as DeliverySummary);
+        toast.success(`Delivery complete — ${s.sent} sent, ${s.failed} failed`);
+      },
+      onError: (e) => toast.error(e.message || "Delivery failed"),
+    });
+  };
+
+  return (
+    <SectionCard title="Monthly Salary Slip Delivery (Admin / HR)">
+      <p className="mb-3 text-xs text-muted-foreground">
+        Processes only <strong>LOCKED</strong> payroll runs. A slip already sent is skipped
+        (ALREADY_SENT); a failed slip is retried, reusing the same document. Preview never sends
+        email.
+      </p>
+      <div className="mb-3 flex flex-wrap items-end gap-2">
+        <label className="text-sm">
+          <span className="mb-1 block text-xs font-semibold uppercase text-muted-foreground">
+            Payroll month
+          </span>
+          <input
+            type="month"
+            className="rounded-lg border border-border bg-card px-2 py-1.5 text-sm"
+            value={month}
+            onChange={(e) => setMonth(e.target.value)}
+          />
+        </label>
+        <label className="text-sm">
+          <span className="mb-1 block text-xs font-semibold uppercase text-muted-foreground">
+            Process
+          </span>
+          <select
+            className="rounded-lg border border-border bg-card px-2 py-1.5 text-sm"
+            value={proc}
+            onChange={(e) => setProc(e.target.value as "" | SlipProcessCode)}
+          >
+            <option value="">All</option>
+            {PROCESSES.map((p) => (
+              <option key={p} value={p}>
+                {p}
+              </option>
+            ))}
+          </select>
+        </label>
+        <Button variant="ghost" className="rounded-lg" disabled={busy} onClick={doPreview}>
+          {preview.isPending ? "Previewing…" : "Preview (dry run)"}
+        </Button>
+        <Button className="rounded-lg" disabled={busy} onClick={doRun}>
+          {run.isPending ? "Processing…" : "Process & send"}
+        </Button>
+      </div>
+
+      {summary ? (
+        <div className="rounded-lg border border-border bg-secondary/20 p-3 text-sm">
+          <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">
+            {summary.dryRun ? "Dry run" : "Result"} — {summary.month}
+            {summary.process ? ` · ${summary.process}` : ""}
+          </p>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-3 lg:grid-cols-4">
+            <Kv k="Payroll runs" v={summary.totalPayrollRuns} />
+            <Kv k="LOCKED eligible" v={summary.lockedEligible} />
+            <Kv k="Skipped (non-locked)" v={summary.skippedNonLocked} />
+            <Kv k="Missing email" v={summary.missingEmail} />
+            {summary.dryRun ? (
+              <>
+                <Kv k="Would generate" v={summary.wouldGenerate} />
+                <Kv k="Already generated" v={summary.alreadyGenerated} />
+                <Kv k="Would send" v={summary.wouldSend} />
+                <Kv k="Already sent" v={summary.alreadySent} />
+              </>
+            ) : (
+              <>
+                <Kv k="Generated" v={summary.generated} />
+                <Kv k="Already generated" v={summary.alreadyGenerated} />
+                <Kv k="Sent" v={summary.sent} tone="ok" />
+                <Kv k="Already sent" v={summary.alreadySent} />
+                <Kv k="Failed" v={summary.failed} tone={summary.failed ? "bad" : undefined} />
+              </>
+            )}
+          </div>
+          {summary.failures.length > 0 ? (
+            <div className="mt-2">
+              <p className="text-xs font-semibold uppercase text-destructive">Failures</p>
+              <ul className="mt-1 space-y-0.5 text-xs text-muted-foreground">
+                {summary.failures.map((f, i) => (
+                  <li key={i}>
+                    user #{f.userId}
+                    {f.salarySlipId ? ` · slip #${f.salarySlipId}` : ""} · {f.reason}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </SectionCard>
+  );
+}
+
+function Kv({ k, v, tone }: { k: string; v: number; tone?: "ok" | "bad" | undefined }) {
+  return (
+    <div>
+      <span
+        className={cn(
+          "font-display text-lg font-black",
+          tone === "ok" && "text-success",
+          tone === "bad" && "text-destructive",
+        )}
+      >
+        {v}
+      </span>
+      <span className="ml-1 text-[11px] uppercase tracking-wide text-muted-foreground">{k}</span>
+    </div>
   );
 }
 

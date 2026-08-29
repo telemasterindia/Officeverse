@@ -1,5 +1,5 @@
 /**
- * Officeverse — salary-slip hooks (Phase 14).
+ * Officeverse — salary-slip hooks (Phase 14 + Phase 15 monthly delivery).
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -10,6 +10,9 @@ import {
   salarySlipHistoryFn,
   sendSalarySlipFn,
 } from "./salary-slip-fns";
+import { monthlyDeliveryPreviewFn, runMonthlyDeliveryFn } from "./salary-batch-fns";
+
+export type ProcessCode = "US" | "UK" | "IN" | "AU";
 
 export type SalarySlipStatus = "GENERATED" | "SENT" | "FAILED";
 
@@ -57,6 +60,25 @@ export function useSendSalarySlip() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (v: { salarySlipId: number }) => sendSalarySlipFn({ data: v }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["salary-slip"] }),
+  });
+}
+
+export interface MonthlyDeliveryInput {
+  month: string;
+  process?: ProcessCode;
+}
+
+export function useMonthlyDeliveryPreview() {
+  return useMutation({
+    mutationFn: (v: MonthlyDeliveryInput) => monthlyDeliveryPreviewFn({ data: v }),
+  });
+}
+
+export function useRunMonthlyDelivery() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: MonthlyDeliveryInput) => runMonthlyDeliveryFn({ data: v }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["salary-slip"] }),
   });
 }

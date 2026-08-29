@@ -43,6 +43,17 @@ export function assertCanManagePayroll(role: HrRole): void {
   }
 }
 
+/** Phase 15: the monthly salary-slip delivery batch runs for Admin / HR OR for
+ *  the authenticated "system" principal (cron). Agents / Closers never qualify. */
+export function canRunSalaryBatch(role: string): boolean {
+  return role === "system" || canManagePayroll(role as HrRole);
+}
+export function assertCanRunSalaryBatch(role: string): void {
+  if (!canRunSalaryBatch(role)) {
+    throw new HttpError(403, "Only Admin / HR may run salary-slip delivery", "forbidden");
+  }
+}
+
 /** self only — a client-supplied owner id is never trusted */
 export function canRequestLeaveFor(actorUserId: number, targetUserId: number): boolean {
   return actorUserId === targetUserId;

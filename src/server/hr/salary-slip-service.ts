@@ -14,7 +14,7 @@
  * No Closer-reward field, amount or logic exists anywhere here.
  */
 import { getDb, isDbConfigured } from "@/lib/db";
-import { recordAudit } from "../audit";
+import { recordAudit, type AuditActorRole } from "../audit";
 import { HttpError } from "../http-error";
 import { config } from "../env";
 import { assertCanManagePayroll, canManagePayroll, type HrRole } from "../authz/hr";
@@ -36,6 +36,15 @@ import * as repo from "../db/repos/salary-slip";
 import type { NewSalarySlip, PayrollRun, SalarySlip, User } from "@/lib/db/schema";
 
 type Meta = { ip?: string | null; userAgent?: string | null };
+
+/** Who is acting — a real Admin/HR user, or the "system" (cron) principal. */
+export interface SlipActorCtx {
+  actorUserId: number | null;
+  actorRole: AuditActorRole;
+}
+function ctxOf(actor: Pick<User, "id" | "role">): SlipActorCtx {
+  return { actorUserId: actor.id, actorRole: actor.role as AuditActorRole };
+}
 
 /* ------------------------------- DTO -------------------------- */
 
@@ -140,6 +149,19 @@ export async function generateSalarySlip(
   meta: Meta = {},
 ): Promise<{ ok: true; slip: SalarySlipDTO; reused: boolean }> {
   assertCanManagePayroll(actor.role as HrRole);
+  return generateSlipForRun(ctxOf(actor), input, meta);
+}
+
+/**
+ * Generate (or reuse) a salary slip for a payroll run — authorization-free core
+ * shared by the Admin/HR endpoint and the monthly batch. Callers MUST gate
+ * access before calling this.
+ */
+export async function generateSlipForRun(
+  ctx: SlipActorCtx,
+  input: GenerateInput,
+  meta: Meta = {},
+): Promise<{ ok: true; slip: SalarySlipDTO; reused: boolean }> {
   if (!isDbConfigured()) throw new HttpError(503, "Database not configured", "db_unavailable");
   const db = getDb();
 
@@ -214,7 +236,7 @@ export async function generateSalarySlip(
     contentSha256: sha256Hex(bytes),
     byteSize: bytes.length,
     sendCount: 0,
-    generatedByUserId: actor.id,
+    generatedByUserId: ctx.actorUserId,
     generatedAt: now,
     createdAt: now,
     updatedAt: now,
@@ -222,8 +244,8 @@ export async function generateSalarySlip(
   const id = await repo.insertSalarySlip(v, db);
 
   await recordAudit({
-    actorUserId: actor.id,
-    actorRole: actor.role,
+    actorUserId: ctx.actorUserId,
+    actorRole: ctx.actorRole,
     action: "salary_slip.generate",
     entityType: "salary_slip",
     entityId: id,
@@ -247,12 +269,8 @@ export async function generateSalarySlip(
 
 /* ----------------------------- send ------------------------- */
 
-async function bytesForSlip(slip: SalarySlip): Promise<Uint8Array> {
-  const store = getSalarySlipStore();
-  const existing = await store.get(slip.storageKey);
-  if (existing) return existing;
-  // dev store lost it (restart) — re-render deterministically & re-persist
-  const bytes = renderBytesFor({
+function regenerateSlipBytes(slip: SalarySlip): Uint8Array {
+  return renderBytesFor({
     employeeName: slip.employeeName,
     userId: slip.userId,
     process: slip.process,
@@ -268,8 +286,60 @@ async function bytesForSlip(slip: SalarySlip): Promise<Uint8Array> {
     isPreview: slip.isPreview,
     generatedAt: slip.generatedAt,
   });
-  await store.put(slip.storageKey, bytes);
-  return bytes;
+}
+
+/**
+ * Load the exact PDF bytes for a slip:
+ *   1. read from durable storage
+ *   2. verify SHA-256 against the immutable `content_sha256`
+ *   3. if missing or corrupt, regenerate deterministically from the snapshot,
+ *      verify the regenerated SHA, restore the durable file, audit it
+ *   4. never trust a client value — `storageKey` + snapshot come from the row
+ */
+async function bytesForSlip(
+  slip: SalarySlip,
+  actor?: SlipActorCtx,
+  meta: Meta = {},
+): Promise<Uint8Array> {
+  const store = getSalarySlipStore();
+  let reason: "missing" | "corrupt" | null = null;
+
+  const existing = await store.get(slip.storageKey).catch(() => null);
+  if (existing) {
+    if (sha256Hex(existing) === slip.contentSha256) return existing;
+    reason = "corrupt";
+  } else {
+    reason = "missing";
+  }
+
+  const regenerated = regenerateSlipBytes(slip);
+  if (sha256Hex(regenerated) !== slip.contentSha256) {
+    throw new HttpError(
+      500,
+      "Salary-slip document integrity check failed",
+      "slip_integrity_failed",
+    );
+  }
+  await store.put(slip.storageKey, regenerated).catch(() => undefined);
+
+  if (actor) {
+    await recordAudit({
+      actorUserId: actor.actorUserId,
+      actorRole: actor.actorRole,
+      action: "salary_slip.storage_regenerated",
+      entityType: "salary_slip",
+      entityId: slip.id,
+      metadata: {
+        period: slip.periodMonth,
+        version: slip.version,
+        reason,
+        storageProvider: store.kind,
+      },
+      ip: meta.ip ?? null,
+      userAgent: meta.userAgent ?? null,
+    });
+  }
+  return regenerated;
 }
 
 export async function sendSalarySlip(
@@ -278,8 +348,44 @@ export async function sendSalarySlip(
   meta: Meta = {},
 ): Promise<{ ok: true; slip: SalarySlipDTO }> {
   assertCanManagePayroll(actor.role as HrRole);
+  const res = await sendSlipById(ctxOf(actor), { salarySlipId: input.salarySlipId }, meta);
+  if (res.status === "NO_PROVIDER") {
+    throw new HttpError(503, "No email provider is configured", "no_provider");
+  }
+  if (res.status === "NO_RECIPIENT") {
+    throw new HttpError(422, "Employee has no valid email address on record", "no_recipient");
+  }
+  if (res.status === "FAILED") {
+    throw new HttpError(502, "Email delivery failed — you can retry", "send_failed");
+  }
+  return { ok: true, slip: res.slip! };
+}
+
+export type SlipSendStatus = "SENT" | "FAILED" | "NO_PROVIDER" | "NO_RECIPIENT";
+export interface SlipSendResult {
+  status: SlipSendStatus;
+  slip?: SalarySlipDTO;
+  error?: string;
+  attemptNo?: number;
+  providerName?: string;
+}
+
+/**
+ * Send one salary slip. Authorization-free core — callers gate first. Never
+ * throws for a provider / recipient problem (returns a status the batch can act
+ * on); only 404 / DB errors throw. A send is recorded SENT only after the
+ * provider confirms; a failure records FAILED and leaves the document intact.
+ */
+export async function sendSlipById(
+  ctx: SlipActorCtx,
+  input: { salarySlipId: number; auto?: boolean },
+  meta: Meta = {},
+): Promise<SlipSendResult> {
   if (!isDbConfigured()) throw new HttpError(503, "Database not configured", "db_unavailable");
   const db = getDb();
+  const auto = input.auto === true;
+  const sentAction = auto ? "salary_slip.auto_send" : "salary_slip.send";
+  const failedAction = auto ? "salary_slip.auto_send_failed" : "salary_slip.send_failed";
 
   const slip = await repo.getSalarySlipById(input.salarySlipId, db);
   if (!slip) throw new HttpError(404, "Salary slip not found", "not_found");
@@ -288,15 +394,15 @@ export async function sendSalarySlip(
   const emp = await getUserById(slip.userId);
   const recipient = emp?.email?.trim().toLowerCase() ?? "";
   if (!emp || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient)) {
-    throw new HttpError(422, "Employee has no valid email address on record", "no_recipient");
+    return { status: "NO_RECIPIENT" };
   }
 
   const provider = getEmailProvider();
   if (!provider) {
-    throw new HttpError(503, "No email provider is configured", "no_provider");
+    return { status: "NO_PROVIDER" };
   }
 
-  const bytes = await bytesForSlip(slip);
+  const bytes = await bytesForSlip(slip, ctx, meta);
   const email = buildSalarySlipEmail({
     employeeName: emp.fullName,
     periodMonth: slip.periodMonth,
@@ -332,7 +438,7 @@ export async function sendSalarySlip(
         recipientEmail: recipient,
         provider: provider.name,
         providerMessageId: result.providerMessageId ?? null,
-        sentByUserId: actor.id,
+        sentByUserId: ctx.actorUserId,
         createdAt: now,
       },
       db,
@@ -349,9 +455,9 @@ export async function sendSalarySlip(
       db,
     );
     await recordAudit({
-      actorUserId: actor.id,
-      actorRole: actor.role,
-      action: "salary_slip.send",
+      actorUserId: ctx.actorUserId,
+      actorRole: ctx.actorRole,
+      action: sentAction,
       entityType: "salary_slip",
       entityId: slip.id,
       metadata: {
@@ -375,7 +481,7 @@ export async function sendSalarySlip(
         recipientEmail: recipient,
         provider: provider.name,
         errorMessage: message,
-        sentByUserId: actor.id,
+        sentByUserId: ctx.actorUserId,
         createdAt: now,
       },
       db,
@@ -386,9 +492,9 @@ export async function sendSalarySlip(
       db,
     );
     await recordAudit({
-      actorUserId: actor.id,
-      actorRole: actor.role,
-      action: "salary_slip.send_failed",
+      actorUserId: ctx.actorUserId,
+      actorRole: ctx.actorRole,
+      action: failedAction,
       entityType: "salary_slip",
       entityId: slip.id,
       metadata: {
@@ -401,11 +507,11 @@ export async function sendSalarySlip(
       ip: meta.ip ?? null,
       userAgent: meta.userAgent ?? null,
     });
-    throw new HttpError(502, "Email delivery failed — you can retry", "send_failed");
+    return { status: "FAILED", error: message, attemptNo, providerName: provider.name };
   }
 
   const saved = await repo.getSalarySlipById(slip.id, db);
-  return { ok: true, slip: slipDTO(saved!) };
+  return { status: "SENT", slip: slipDTO(saved!), attemptNo, providerName: provider.name };
 }
 
 /* ----------------------------- reads ----------------------- */
@@ -479,7 +585,7 @@ export async function downloadSalarySlip(
     throw new HttpError(403, "You can only access your own salary slip", "forbidden");
   }
 
-  const bytes = await bytesForSlip(slip);
+  const bytes = await bytesForSlip(slip, ctxOf(actor), meta);
   await recordAudit({
     actorUserId: actor.id,
     actorRole: actor.role,

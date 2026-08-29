@@ -101,15 +101,25 @@ describe("salary-slip endpoints — placement & trust boundary", () => {
     expect(fnsSrc).toMatch(/from "@\/server\/hr\/salary-slip-service"/);
   });
 
-  it("the email provider performs no network I/O and reads no secret", () => {
-    expect(providerCode).not.toMatch(/\bfetch\(|https?:\/\/|nodemailer|createTransport/i);
-    expect(providerCode).not.toMatch(/API_KEY|_SECRET|PASSWORD|SMTP_/);
+  it("the email provider never hard-codes or leaks a secret", () => {
+    // Phase 15: the provider MAY do network I/O (that is its job now), but the
+    // API key is only ever read through env() and never assigned a literal or
+    // returned to a caller.
+    expect(providerCode).not.toMatch(/RESEND_API_KEY\s*[:=]\s*["'][A-Za-z0-9_-]{8,}["']/);
+    expect(providerCode).toMatch(/env\("RESEND_API_KEY"\)/);
+    expect(providerCode).not.toMatch(/console\.(log|info|warn|error)\([^)]*apiKey/i);
+    // the diagnostics helper never carries the key
+    expect(providerCode).toMatch(/describeEmailProvider/);
+    expect(providerCode).not.toMatch(/reason:\s*[^,\n}]*apiKey/);
   });
 
   it("generate + send are Admin/HR gated and audited", () => {
     expect(svcCode).toMatch(/assertCanManagePayroll\(actor\.role as HrRole\)/);
     expect(svcCode).toMatch(/action: "salary_slip\.generate"/);
-    expect(svcCode).toMatch(/action: "salary_slip\.send"/);
-    expect(svcCode).toMatch(/action: "salary_slip\.send_failed"/);
+    // Phase 15 routes the action name through sentAction/failedAction; the
+    // literals still appear and the auto_* variants are added
+    expect(svcCode).toMatch(/"salary_slip\.send"/);
+    expect(svcCode).toMatch(/"salary_slip\.send_failed"/);
+    expect(svcCode).toMatch(/"salary_slip\.auto_send"/);
   });
 });
