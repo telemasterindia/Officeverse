@@ -18,6 +18,13 @@ import * as schema from "./schema";
 
 export { schema };
 
+/** The Drizzle client type. */
+export type DB = MySql2Database<typeof schema>;
+/** The Drizzle transaction handle passed to `db.transaction(async (tx) => …)`. */
+export type Tx = Parameters<Parameters<DB["transaction"]>[0]>[0];
+/** Either the pooled client or a transaction — repo functions accept this. */
+export type DBX = DB | Tx;
+
 let _pool: Pool | null = null;
 let _db: MySql2Database<typeof schema> | null = null;
 

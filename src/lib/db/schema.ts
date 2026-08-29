@@ -77,7 +77,20 @@ export const LEAD_SOURCES = ["app", "import", "conversion"] as const;
 export const FOLLOW_UP_STATUSES = ["SCHEDULED", "COMPLETED", "CANCELLED", "CONVERTED"] as const;
 export const FOLLOW_UP_OWNER_ROLES = ["agent", "closer"] as const;
 export const FOLLOW_UP_SOURCES = ["app", "import"] as const;
-export const ATTEMPT_OUTCOMES = ["RESCHEDULED", "COMPLETED", "CANCELLED"] as const;
+/**
+ * A follow-up attempt row exists for every scheduled slot in the reschedule
+ * chain, INCLUDING the current active one (outcome "SCHEDULED"). On reschedule
+ * the current row flips "SCHEDULED" → "RESCHEDULED" and a new "SCHEDULED" row is
+ * appended; on complete/cancel/convert the current row flips to the terminal
+ * outcome. History is append-only and never overwritten.
+ */
+export const ATTEMPT_OUTCOMES = [
+  "SCHEDULED",
+  "RESCHEDULED",
+  "COMPLETED",
+  "CANCELLED",
+  "CONVERTED",
+] as const;
 export const CURRENT_DEBTS = ["Current", "Late"] as const;
 
 export const CLIENT_STATUSES = ["active", "prospect", "inactive", "closed"] as const;
@@ -319,6 +332,7 @@ export const followUps = mysqlTable(
   (t) => ({
     codeUq: unique("follow_ups_code_uq").on(t.followUpCode),
     ownerIdx: index("follow_ups_owner_idx").on(t.ownerUserId),
+    ownerStatusIdx: index("follow_ups_owner_status_idx").on(t.ownerUserId, t.status),
     statusIdx: index("follow_ups_status_idx").on(t.status),
     dueScanIdx: index("follow_ups_due_scan_idx").on(t.status, t.scheduledAt),
     leadIdx: index("follow_ups_lead_idx").on(t.leadId),
@@ -443,6 +457,12 @@ export const followUpAttempts = mysqlTable(
     scheduledAt: dt("scheduled_at").notNull(),
     outcome: mysqlEnum("outcome", ATTEMPT_OUTCOMES).notNull(),
     note: text("note"),
+    /** the Lead this attempt produced — set only on the CONVERTED entry */
+    relatedLeadId: int("related_lead_id", { unsigned: true }).references(
+      (): AnyMySqlColumn => leads.id,
+      { onDelete: "set null", onUpdate: "cascade" },
+    ),
+    relatedLeadCode: varchar("related_lead_code", { length: 32 }),
     recordedAt: dt("recorded_at").notNull(),
     recordedByUserId: int("recorded_by_user_id", { unsigned: true }).references(() => users.id, {
       onDelete: "set null",
@@ -452,6 +472,7 @@ export const followUpAttempts = mysqlTable(
   (t) => ({
     fuAttemptUq: unique("fu_attempts_no_uq").on(t.followUpId, t.attemptNo),
     fuIdx: index("fu_attempts_fu_idx").on(t.followUpId),
+    relatedLeadIdx: index("fu_attempts_related_lead_idx").on(t.relatedLeadId),
   }),
 );
 
@@ -736,6 +757,7 @@ export const followUpsRelations = relations(followUps, ({ one, many }) => ({
 export const followUpAttemptsRelations = relations(followUpAttempts, ({ one }) => ({
   followUp: one(followUps, { fields: [followUpAttempts.followUpId], references: [followUps.id] }),
   recordedBy: one(users, { fields: [followUpAttempts.recordedByUserId], references: [users.id] }),
+  relatedLead: one(leads, { fields: [followUpAttempts.relatedLeadId], references: [leads.id] }),
 }));
 
 export const notificationsRelations = relations(notifications, ({ one }) => ({
@@ -784,6 +806,7 @@ export type NewLeadAssignment = typeof leadAssignments.$inferInsert;
 export type FollowUp = typeof followUps.$inferSelect;
 export type NewFollowUp = typeof followUps.$inferInsert;
 export type FollowUpAttempt = typeof followUpAttempts.$inferSelect;
+export type NewFollowUpAttempt = typeof followUpAttempts.$inferInsert;
 export type Notification = typeof notifications.$inferSelect;
 export type EmailJob = typeof emailJobs.$inferSelect;
 export type AuditLog = typeof auditLogs.$inferSelect;

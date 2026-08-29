@@ -80,9 +80,32 @@ export function wallParts(wall: string): { date: string; time: string } {
   return { date: s.slice(0, 10), time: s.slice(11, 16) };
 }
 
-function addDaysYMD(ymd: string, delta: number): string {
+export function addDaysYMD(ymd: string, delta: number): string {
   const [y, m, d] = ymd.split("-").map(Number);
   return new Date(Date.UTC(y!, m! - 1, d! + delta)).toISOString().slice(0, 10);
+}
+
+/** Calendar date in IST right now ("YYYY-MM-DD") — NOT the shift date. */
+export function calendarTodayIST(instant: number | Date = Date.now()): string {
+  return nowIST(instant).slice(0, 10);
+}
+
+/**
+ * Build the canonical scheduled_at (IST wall-clock "YYYY-MM-DD HH:MM:00") from a
+ * client-supplied calendar date + time. Mirrors the existing client
+ * buildScheduledAt() but stores a bare wall-clock string (no offset) to match
+ * the MySQL `datetime` columns.
+ */
+export function toScheduledWallClock(dateYMD: string, timeHM: string): string {
+  const [h = "09", m = "00"] = timeHM.split(":");
+  const two = (s: string) => String(Number(s)).padStart(2, "0");
+  return `${dateYMD} ${two(h)}:${two(m)}:00`;
+}
+
+/** IST wall-clock string → ISO string with the +05:30 offset (client display). */
+export function wallToIstIso(wall: string): string {
+  const s = wall.trim().replace(" ", "T");
+  return /\+\d\d:\d\d$/.test(s) ? s : `${s}+05:30`;
 }
 
 /**

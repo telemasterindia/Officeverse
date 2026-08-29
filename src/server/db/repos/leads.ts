@@ -6,7 +6,7 @@
  * src/lib/db/index.ts; never opens its own connection.
  */
 import { and, asc, desc, eq, gte, like, lte, ne, or, sql, type SQL } from "drizzle-orm";
-import { getDb } from "@/lib/db";
+import { getDb, type DBX } from "@/lib/db";
 import {
   leadAssignments,
   leads,
@@ -17,13 +17,18 @@ import {
 } from "@/lib/db/schema";
 import { leadCode as fmtLeadCode, nextLeadSeq } from "../../ids";
 
-export async function getLeadById(id: number): Promise<Lead | undefined> {
-  const rows = await getDb().select().from(leads).where(eq(leads.id, id)).limit(1);
+/**
+ * Every function accepts an optional executor so the Phase-4 conversion can run
+ * lead creation inside a single MySQL transaction. Defaults to the shared pool.
+ */
+
+export async function getLeadById(id: number, ex: DBX = getDb()): Promise<Lead | undefined> {
+  const rows = await ex.select().from(leads).where(eq(leads.id, id)).limit(1);
   return rows[0];
 }
 
-export async function getLeadByCode(code: string): Promise<Lead | undefined> {
-  const rows = await getDb().select().from(leads).where(eq(leads.leadCode, code)).limit(1);
+export async function getLeadByCode(code: string, ex: DBX = getDb()): Promise<Lead | undefined> {
+  const rows = await ex.select().from(leads).where(eq(leads.leadCode, code)).limit(1);
   return rows[0];
 }
 
@@ -32,8 +37,8 @@ export async function getLeadByCode(code: string): Promise<Lead | undefined> {
  * see the old nextLeadId). Uses MAX over the numeric part; the caller retries
  * once on the unique-constraint race.
  */
-export async function nextLeadCode(): Promise<string> {
-  const rows = await getDb()
+export async function nextLeadCode(ex: DBX = getDb()): Promise<string> {
+  const rows = await ex
     .select({ max: sql<number | null>`max(cast(substring(${leads.leadCode}, 5) as unsigned))` })
     .from(leads);
   const max = Number(rows[0]?.max ?? 0);
@@ -90,10 +95,10 @@ export async function listLeads(query: ListLeadsQuery): Promise<{ rows: Lead[]; 
   return { rows, total: Number(totals[0]?.n ?? 0) };
 }
 
-export async function insertLead(values: NewLead): Promise<Lead> {
-  const res = await getDb().insert(leads).values(values);
+export async function insertLead(values: NewLead, ex: DBX = getDb()): Promise<Lead> {
+  const res = await ex.insert(leads).values(values);
   const insertId = Number((res as unknown as { insertId?: number | string }).insertId ?? 0);
-  const row = insertId ? await getLeadById(insertId) : await getLeadByCode(values.leadCode);
+  const row = insertId ? await getLeadById(insertId, ex) : await getLeadByCode(values.leadCode, ex);
   if (!row) throw new Error("Lead insert did not return a row");
   return row;
 }
@@ -115,8 +120,8 @@ export async function setAssignedCloser(
     .where(eq(leads.id, id));
 }
 
-export async function insertAssignment(row: NewLeadAssignment): Promise<void> {
-  await getDb().insert(leadAssignments).values(row);
+export async function insertAssignment(row: NewLeadAssignment, ex: DBX = getDb()): Promise<void> {
+  await ex.insert(leadAssignments).values(row);
 }
 
 export async function listAssignments(leadId: number): Promise<LeadAssignment[]> {
