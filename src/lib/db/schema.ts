@@ -1420,6 +1420,160 @@ export const salarySlipSends = mysqlTable(
   }),
 );
 
+/* ================================================================== *
+ *  GAMIFICATION FOUNDATION (Phase 20)                                 *
+ *  Points / leaderboard / achievements / streaks.                     *
+ *                                                                    *
+ *  NOT money. NOT payroll. NOT incentive/commission/Regularity Bonus. *
+ *  Nothing here is ever consumed by any HR / payroll / salary-slip    *
+ *  calculation. Point values are DATA-DRIVEN (gamification_point_rules *
+ *  — default 0) and configured by an Admin, never hard-coded here.    *
+ * ================================================================== */
+
+export const GAMIFICATION_EVENTS = [
+  "LEAD_SUBMITTED",
+  "LEAD_ACCEPTED",
+  "SALE",
+  "TEAM_MILESTONE",
+  "ACHIEVEMENT_UNLOCKED",
+  "ADMIN_ADJUSTMENT",
+] as const;
+
+export const POINT_TXN_STATUSES = ["ACTIVE", "REVERSED"] as const;
+export const POINT_TXN_SOURCES = ["system", "admin"] as const;
+export const GAMIFICATION_STREAK_TYPES = ["ACCEPTED_LEAD_STREAK"] as const;
+
+/* -- 26 · gamification_point_rules  (data-driven config; default 0) -- */
+export const gamificationPointRules = mysqlTable(
+  "gamification_point_rules",
+  {
+    id: int("id", { unsigned: true }).autoincrement().primaryKey(),
+    event: mysqlEnum("event", GAMIFICATION_EVENTS).notNull(),
+    /** points awarded for one occurrence — CONFIGURABLE, defaults to 0 */
+    points: int("points").notNull().default(0),
+    enabled: boolean("enabled").notNull().default(true),
+    note: varchar("note", { length: 255 }),
+    updatedByUserId: int("updated_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    createdAt: dt("created_at").notNull(),
+    updatedAt: dt("updated_at").notNull(),
+  },
+  (t) => ({
+    eventUq: unique("gamification_point_rules_event_uq").on(t.event),
+  }),
+);
+
+/* -- 27 · gamification_point_transactions  (immutable ledger) -------- *
+ *  The user's total is DERIVED from these rows (ACTIVE minus REVERSED),*
+ *  never a standalone mutable number. `dedupe_key` makes each business *
+ *  event award-once.                                                  */
+export const gamificationPointTransactions = mysqlTable(
+  "gamification_point_transactions",
+  {
+    id: bigint("id", { mode: "number", unsigned: true }).autoincrement().primaryKey(),
+    userId: int("user_id", { unsigned: true })
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    role: mysqlEnum("role", ["agent", "closer"]).notNull(),
+    process: mysqlEnum("process", PROCESS_CODES).notNull(),
+    event: mysqlEnum("event", GAMIFICATION_EVENTS).notNull(),
+    points: int("points").notNull(),
+    /** operational SHIFT DATE the event belongs to, "YYYY-MM-DD" (server-derived) */
+    operationalDate: dcol("operational_date").notNull(),
+    /** what caused it — e.g. "lead" / "follow_up" / "milestone" / "achievement" */
+    referenceType: varchar("reference_type", { length: 40 }),
+    referenceId: varchar("reference_id", { length: 64 }),
+    /** deterministic idempotency key: `<event>:<referenceType>:<referenceId>` */
+    dedupeKey: varchar("dedupe_key", { length: 191 }).notNull(),
+    status: mysqlEnum("status", POINT_TXN_STATUSES).notNull().default("ACTIVE"),
+    source: mysqlEnum("source", POINT_TXN_SOURCES).notNull().default("system"),
+    /** for a REVERSED row: which txn reversed it (audit trail, never deleted) */
+    reversalOfId: bigint("reversal_of_id", { mode: "number", unsigned: true }),
+    reason: varchar("reason", { length: 255 }),
+    createdByUserId: int("created_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    createdAt: dt("created_at").notNull(),
+  },
+  (t) => ({
+    dedupeUq: unique("gamification_point_txn_dedupe_uq").on(t.dedupeKey),
+    userDateIdx: index("gamification_point_txn_user_date_idx").on(t.userId, t.operationalDate),
+    dateIdx: index("gamification_point_txn_date_idx").on(t.operationalDate),
+    userStatusIdx: index("gamification_point_txn_user_status_idx").on(t.userId, t.status),
+  }),
+);
+
+/* -- 28 · gamification_achievements  (data-driven registry) --------- */
+export const gamificationAchievements = mysqlTable(
+  "gamification_achievements",
+  {
+    id: int("id", { unsigned: true }).autoincrement().primaryKey(),
+    code: varchar("code", { length: 60 }).notNull(),
+    name: varchar("name", { length: 120 }).notNull(),
+    description: varchar("description", { length: 400 }),
+    /** short glyph / badge token for PhotoDisplay */
+    badge: varchar("badge", { length: 16 }),
+    category: varchar("category", { length: 40 }).notNull().default("general"),
+    /** machine criteria, e.g. { kind:"COUNT", event:"LEAD_ACCEPTED", threshold:0 } */
+    criteria: json("criteria"),
+    repeatable: boolean("repeatable").notNull().default(false),
+    enabled: boolean("enabled").notNull().default(true),
+    createdAt: dt("created_at").notNull(),
+    updatedAt: dt("updated_at").notNull(),
+  },
+  (t) => ({
+    codeUq: unique("gamification_achievements_code_uq").on(t.code),
+  }),
+);
+
+/* -- 29 · gamification_user_achievements  (award-once per user+code) - */
+export const gamificationUserAchievements = mysqlTable(
+  "gamification_user_achievements",
+  {
+    id: bigint("id", { mode: "number", unsigned: true }).autoincrement().primaryKey(),
+    userId: int("user_id", { unsigned: true })
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    achievementCode: varchar("achievement_code", { length: 60 }).notNull(),
+    earnedAt: dt("earned_at").notNull(),
+    /** the event/reference that satisfied the criteria */
+    triggerType: varchar("trigger_type", { length: 40 }),
+    triggerId: varchar("trigger_id", { length: 64 }),
+    createdByUserId: int("created_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+  },
+  (t) => ({
+    userCodeUq: unique("gamification_user_achievement_uq").on(t.userId, t.achievementCode),
+    userIdx: index("gamification_user_achievement_user_idx").on(t.userId),
+  }),
+);
+
+/* -- 30 · gamification_streaks  (server-authoritative; not attendance) */
+export const gamificationStreaks = mysqlTable(
+  "gamification_streaks",
+  {
+    id: bigint("id", { mode: "number", unsigned: true }).autoincrement().primaryKey(),
+    userId: int("user_id", { unsigned: true })
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    streakType: mysqlEnum("streak_type", GAMIFICATION_STREAK_TYPES).notNull(),
+    /** consecutive qualifying OPERATIONAL days */
+    currentCount: int("current_count", { unsigned: true }).notNull().default(0),
+    bestCount: int("best_count", { unsigned: true }).notNull().default(0),
+    /** last operational date that satisfied the streak's event, "YYYY-MM-DD" */
+    lastOperationalDate: dcol("last_operational_date"),
+    updatedAt: dt("updated_at").notNull(),
+  },
+  (t) => ({
+    userTypeUq: unique("gamification_streak_user_type_uq").on(t.userId, t.streakType),
+  }),
+);
+
 /* ------------------------------------------------------------------ *
  *  15 · schema_meta  (one-row marker: has production been seeded?)    *
  *  Keeps demo/seed data strictly separate from production (Phase 19). *
@@ -1574,3 +1728,13 @@ export type SalarySlip = typeof salarySlips.$inferSelect;
 export type NewSalarySlip = typeof salarySlips.$inferInsert;
 export type SalarySlipSend = typeof salarySlipSends.$inferSelect;
 export type NewSalarySlipSend = typeof salarySlipSends.$inferInsert;
+export type GamificationPointRule = typeof gamificationPointRules.$inferSelect;
+export type NewGamificationPointRule = typeof gamificationPointRules.$inferInsert;
+export type GamificationPointTransaction = typeof gamificationPointTransactions.$inferSelect;
+export type NewGamificationPointTransaction = typeof gamificationPointTransactions.$inferInsert;
+export type GamificationAchievement = typeof gamificationAchievements.$inferSelect;
+export type NewGamificationAchievement = typeof gamificationAchievements.$inferInsert;
+export type GamificationUserAchievement = typeof gamificationUserAchievements.$inferSelect;
+export type NewGamificationUserAchievement = typeof gamificationUserAchievements.$inferInsert;
+export type GamificationStreak = typeof gamificationStreaks.$inferSelect;
+export type NewGamificationStreak = typeof gamificationStreaks.$inferInsert;

@@ -20,6 +20,7 @@ import { Route as ShellEmployeesRouteImport } from './routes/_shell.employees'
 import { Route as ShellExportsRouteImport } from './routes/_shell.exports'
 import { Route as ShellHolidaysRouteImport } from './routes/_shell.holidays'
 import { Route as ShellImportsRouteImport } from './routes/_shell.imports'
+import { Route as ShellLeaderboardRouteImport } from './routes/_shell.leaderboard'
 import { Route as ShellLeaveRouteImport } from './routes/_shell.leave'
 import { Route as ShellMissionControlRouteImport } from './routes/_shell.mission-control'
 import { Route as ShellNotificationsRouteImport } from './routes/_shell.notifications'
@@ -95,6 +96,11 @@ const ShellHolidaysRoute = ShellHolidaysRouteImport.update({
 const ShellImportsRoute = ShellImportsRouteImport.update({
   id: '/imports',
   path: '/imports',
+  getParentRoute: () => ShellRoute,
+} as any)
+const ShellLeaderboardRoute = ShellLeaderboardRouteImport.update({
+  id: '/leaderboard',
+  path: '/leaderboard',
   getParentRoute: () => ShellRoute,
 } as any)
 const ShellLeaveRoute = ShellLeaveRouteImport.update({
@@ -220,6 +226,7 @@ export interface FileRoutesByFullPath {
   '/exports': typeof ShellExportsRoute
   '/holidays': typeof ShellHolidaysRoute
   '/imports': typeof ShellImportsRoute
+  '/leaderboard': typeof ShellLeaderboardRoute
   '/leave': typeof ShellLeaveRoute
   '/mission-control': typeof ShellMissionControlRoute
   '/notifications': typeof ShellNotificationsRoute
@@ -254,6 +261,7 @@ export interface FileRoutesByTo {
   '/exports': typeof ShellExportsRoute
   '/holidays': typeof ShellHolidaysRoute
   '/imports': typeof ShellImportsRoute
+  '/leaderboard': typeof ShellLeaderboardRoute
   '/leave': typeof ShellLeaveRoute
   '/mission-control': typeof ShellMissionControlRoute
   '/notifications': typeof ShellNotificationsRoute
@@ -290,6 +298,7 @@ export interface FileRoutesById {
   '/_shell/exports': typeof ShellExportsRoute
   '/_shell/holidays': typeof ShellHolidaysRoute
   '/_shell/imports': typeof ShellImportsRoute
+  '/_shell/leaderboard': typeof ShellLeaderboardRoute
   '/_shell/leave': typeof ShellLeaveRoute
   '/_shell/mission-control': typeof ShellMissionControlRoute
   '/_shell/notifications': typeof ShellNotificationsRoute
@@ -326,6 +335,7 @@ export interface FileRouteTypes {
     | '/exports'
     | '/holidays'
     | '/imports'
+    | '/leaderboard'
     | '/leave'
     | '/mission-control'
     | '/notifications'
@@ -360,6 +370,7 @@ export interface FileRouteTypes {
     | '/exports'
     | '/holidays'
     | '/imports'
+    | '/leaderboard'
     | '/leave'
     | '/mission-control'
     | '/notifications'
@@ -395,6 +406,7 @@ export interface FileRouteTypes {
     | '/_shell/exports'
     | '/_shell/holidays'
     | '/_shell/imports'
+    | '/_shell/leaderboard'
     | '/_shell/leave'
     | '/_shell/mission-control'
     | '/_shell/notifications'
@@ -501,6 +513,13 @@ declare module '@tanstack/react-router' {
       path: '/imports'
       fullPath: '/imports'
       preLoaderRoute: typeof ShellImportsRouteImport
+      parentRoute: typeof ShellRoute
+    }
+    '/_shell/leaderboard': {
+      id: '/_shell/leaderboard'
+      path: '/leaderboard'
+      fullPath: '/leaderboard'
+      preLoaderRoute: typeof ShellLeaderboardRouteImport
       parentRoute: typeof ShellRoute
     }
     '/_shell/leave': {
@@ -670,6 +689,7 @@ interface ShellRouteChildren {
   ShellExportsRoute: typeof ShellExportsRoute
   ShellHolidaysRoute: typeof ShellHolidaysRoute
   ShellImportsRoute: typeof ShellImportsRoute
+  ShellLeaderboardRoute: typeof ShellLeaderboardRoute
   ShellLeaveRoute: typeof ShellLeaveRoute
   ShellMissionControlRoute: typeof ShellMissionControlRoute
   ShellNotificationsRoute: typeof ShellNotificationsRoute
@@ -704,6 +724,7 @@ const ShellRouteChildren: ShellRouteChildren = {
   ShellExportsRoute: ShellExportsRoute,
   ShellHolidaysRoute: ShellHolidaysRoute,
   ShellImportsRoute: ShellImportsRoute,
+  ShellLeaderboardRoute: ShellLeaderboardRoute,
   ShellLeaveRoute: ShellLeaveRoute,
   ShellMissionControlRoute: ShellMissionControlRoute,
   ShellNotificationsRoute: ShellNotificationsRoute,
