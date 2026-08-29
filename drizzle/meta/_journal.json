@@ -1,0 +1,13 @@
+{
+  "version": "7",
+  "dialect": "mysql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "5",
+      "when": 1787988361804,
+      "tag": "0000_init_officeverse_schema",
+      "breakpoints": true
+    }
+  ]
+}
