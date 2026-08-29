@@ -126,3 +126,117 @@ export const myPayrollFn = createServerFn({ method: "GET" })
     const user = await requireUser();
     return svc.myPayroll(user, data.month);
   });
+
+/* ============ Phase 16 — payroll input foundations ============ *
+ * The client submits only identifiers + HR-typed configuration values
+ * (a base salary, an employment date, overtime minutes, or an explicit
+ * labelled adjustment amount). It never submits a calculated payroll
+ * figure, a proration result, a deduction the engine would compute, or
+ * an approval identity.                                               */
+
+const employmentPeriodInput = z.object({
+  userId,
+  startDate: ymd,
+  endDate: ymd.nullable().optional(),
+  note: z.string().trim().max(255).optional(),
+});
+const overtimeInput = z.object({
+  userId,
+  workDate: ymd,
+  overtimeMinutes: z.coerce.number().int().min(0).max(1440),
+  scheduledShiftStart: z
+    .string()
+    .regex(/^\d{2}:\d{2}$/)
+    .optional(),
+  scheduledShiftEnd: z
+    .string()
+    .regex(/^\d{2}:\d{2}$/)
+    .optional(),
+  reason: z.string().trim().max(255).optional(),
+});
+const overtimeDecisionInput = z.object({
+  overtimeId: userId,
+  decision: z.enum(["APPROVED", "REJECTED", "VOID"]),
+});
+const adjustmentInput = z.object({
+  userId,
+  month,
+  kind: z.enum(["EARNING", "DEDUCTION"]),
+  label: z.string().trim().min(1).max(120),
+  amount: z.coerce.number().finite().min(0).max(100_000_000),
+  reason: z.string().trim().max(255).optional(),
+});
+const breakdownInput = z.object({ userId, month });
+
+export const setEmploymentPeriodFn = createServerFn({ method: "POST" })
+  .inputValidator((d: unknown) => employmentPeriodInput.parse(d))
+  .handler(async ({ data }): Promise<{ id: number }> => {
+    const user = await requireUser();
+    const { userId: target, ...rest } = data;
+    return svc.setEmploymentPeriod(user, target, rest, requestInfo());
+  });
+
+export const employmentPeriodsFn = createServerFn({ method: "GET" })
+  .inputValidator((d: unknown) => z.object({ userId }).parse(d))
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return svc.listEmploymentPeriods(user, data.userId);
+  });
+
+export const recordOvertimeFn = createServerFn({ method: "POST" })
+  .inputValidator((d: unknown) => overtimeInput.parse(d))
+  .handler(async ({ data }): Promise<{ id: number }> => {
+    const user = await requireUser();
+    return svc.recordOvertime(user, data, requestInfo());
+  });
+
+export const decideOvertimeFn = createServerFn({ method: "POST" })
+  .inputValidator((d: unknown) => overtimeDecisionInput.parse(d))
+  .handler(async ({ data }): Promise<{ ok: true }> => {
+    const user = await requireUser();
+    return svc.decideOvertime(user, data.overtimeId, data.decision, requestInfo());
+  });
+
+export const adminOvertimeFn = createServerFn({ method: "GET" })
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        month: month.optional(),
+        status: z.enum(["PENDING", "APPROVED", "REJECTED", "VOID"]).optional(),
+      })
+      .partial()
+      .default({})
+      .parse(d ?? {}),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return svc.listOvertime(user, data);
+  });
+
+export const myOvertimeFn = createServerFn({ method: "GET" })
+  .inputValidator((d: unknown) => myInput.parse(d ?? {}))
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return svc.myOvertime(user, data.month);
+  });
+
+export const addAdjustmentFn = createServerFn({ method: "POST" })
+  .inputValidator((d: unknown) => adjustmentInput.parse(d))
+  .handler(async ({ data }): Promise<{ id: number }> => {
+    const user = await requireUser();
+    return svc.addPayrollAdjustment(user, data, requestInfo());
+  });
+
+export const voidAdjustmentFn = createServerFn({ method: "POST" })
+  .inputValidator((d: unknown) => z.object({ adjustmentId: userId }).parse(d))
+  .handler(async ({ data }): Promise<{ ok: true }> => {
+    const user = await requireUser();
+    return svc.voidPayrollAdjustment(user, data.adjustmentId, requestInfo());
+  });
+
+export const payrollBreakdownFn = createServerFn({ method: "GET" })
+  .inputValidator((d: unknown) => breakdownInput.parse(d))
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return svc.payrollBreakdown(user, data.userId, data.month);
+  });

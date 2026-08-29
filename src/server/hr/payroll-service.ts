@@ -22,13 +22,17 @@ import { assertCanManagePayroll, type HrRole } from "../authz/hr";
 import { nowIST } from "../time";
 import {
   assertPayrollTransition,
-  calculatePayroll,
+  calculateMonthlyPayroll,
   pickEffectiveProfile,
-  PAYROLL_CALC_VERSION,
+  PAYROLL_CALC_VERSION_V2,
   type PayrollStatus,
 } from "./payroll";
+import { PRORATION_BASES, type ProrationBasis } from "./payroll-proration";
+import { PAYROLL_ROUNDING_POLICY } from "./payroll-money";
 import { recomputeBonus } from "./service";
+import { env } from "../env";
 import * as repo from "../db/repos/payroll";
+import * as inputsRepo from "../db/repos/payroll-inputs";
 import * as hrRepo from "../db/repos/hr";
 import type { NewPayrollRun, NewSalaryProfile, PayrollRun, User } from "@/lib/db/schema";
 
@@ -49,6 +53,16 @@ function addDays(ymd: string, delta: number): string {
 }
 function toAmount(n: number): string {
   return n.toFixed(2);
+}
+function monthDayRange(month: string): { from: string; to: string } {
+  const [y, m] = month.split("-").map(Number);
+  const last = new Date(Date.UTC(y!, m!, 0)).getUTCDate();
+  return { from: `${month}-01`, to: `${month}-${String(last).padStart(2, "0")}` };
+}
+/** Proration is OFF unless the business has picked a denominator. */
+function configuredProrationBasis(): ProrationBasis | null {
+  const v = env("OFFICEVERSE_PRORATION_BASIS")?.toUpperCase();
+  return v && (PRORATION_BASES as readonly string[]).includes(v) ? (v as ProrationBasis) : null;
 }
 
 async function processOf(userId: number): Promise<string> {
@@ -223,11 +237,25 @@ export interface PayrollDTO {
   month: string;
   process: string;
   status: PayrollStatus;
+  /** full-month base (Phase-13 meaning of base_salary is preserved) */
   baseSalary: string;
+  monthlyBaseSalary: string;
+  payableBaseSalary: string;
+  prorationBasis: string | null;
+  prorationNumerator: number;
+  prorationDenominator: number;
   regularityBonus: number;
-  calculatedSalary: string;
   leaveCount: number;
   offCount: number;
+  unpaidLeaveDays: number;
+  unpaidLeaveDeduction: string;
+  offDaysConsidered: number;
+  offDeduction: string;
+  approvedOvertimeMinutes: number;
+  overtimeAmount: string;
+  adjustmentsTotal: string;
+  /** gross before statutory deductions */
+  calculatedSalary: string;
   calculationVersion: string;
   calculatedAt: string | null;
   approvedAt: string | null;
@@ -244,10 +272,22 @@ function payrollDTO(r: PayrollRun, employeeName?: string): PayrollDTO {
     process: r.process,
     status: r.status as PayrollStatus,
     baseSalary: r.baseSalary,
+    monthlyBaseSalary: r.monthlyBaseSalary,
+    payableBaseSalary: r.payableBaseSalary,
+    prorationBasis: r.prorationBasis ?? null,
+    prorationNumerator: r.prorationNumerator,
+    prorationDenominator: r.prorationDenominator,
     regularityBonus: r.regularityBonus,
-    calculatedSalary: r.calculatedSalary,
     leaveCount: r.leaveCount,
     offCount: r.offCount,
+    unpaidLeaveDays: r.unpaidLeaveDays,
+    unpaidLeaveDeduction: r.unpaidLeaveDeduction,
+    offDaysConsidered: r.offDaysConsidered,
+    offDeduction: r.offDeduction,
+    approvedOvertimeMinutes: r.approvedOvertimeMinutes,
+    overtimeAmount: r.overtimeAmount,
+    adjustmentsTotal: r.adjustmentsTotal,
+    calculatedSalary: r.calculatedSalary,
     calculationVersion: r.calculationVersion,
     calculatedAt: r.calculatedAt ?? null,
     approvedAt: r.approvedAt ?? null,
@@ -297,26 +337,66 @@ export async function calculatePayrollForEmployee(
   const bonus = await recomputeBonus(targetUserId, process, month);
   const bonusRow = await hrRepo.getBonus(targetUserId, month, db);
 
-  // ---- pure money maths ----
-  const calc = calculatePayroll({
-    baseSalary: baseSalaryNum,
+  // ---- Phase-16 authoritative inputs (counts only; every monetary RATE is
+  //      still an undefined business decision, so the deductions/OT/adjustment
+  //      amounts passed to the engine below are ₹0 except HR-typed adjustments)
+  const { from, to } = monthDayRange(month);
+  const employmentPeriods = await inputsRepo.listEmploymentPeriodsForUser(targetUserId, db);
+  const unpaidLeaveDays = await inputsRepo.countUnpaidLeaveDaysInMonth(targetUserId, from, to, db);
+  const approvedOvertimeMinutes = await inputsRepo.sumApprovedOvertimeMinutes(
+    targetUserId,
+    month,
+    db,
+  );
+  const adjustmentsTotal = await inputsRepo.activeAdjustmentsTotal(targetUserId, month, db);
+
+  // ---- pure breakdown engine ----
+  const calc = calculateMonthlyPayroll({
+    month,
+    monthlyBaseSalary: baseSalaryNum,
     regularityBonus: bonus.bonusAmount,
-    leaveCount: bonus.leaveCount,
-    offCount: bonus.offCount,
+    employmentPeriods: employmentPeriods.map((p) => ({
+      startDate: p.startDate,
+      endDate: p.endDate ?? null,
+      active: p.active,
+    })),
+    prorationBasis: configuredProrationBasis(),
+    approvedLeaveDays: bonus.leaveCount,
+    unpaidLeaveDays,
+    activeOffDays: bonus.offCount,
+    approvedOvertimeMinutes,
+    // undefined business rates → ₹0 (never invented here)
+    unpaidLeaveDeduction: 0,
+    offDeduction: 0,
+    overtimeAmount: 0,
+    adjustmentsTotal,
   });
 
   const now = nowIST();
   const snapshot = {
     process: process as PayrollRun["process"],
     status: "CALCULATED" as const,
-    baseSalary: toAmount(calc.baseSalary),
+    // base_salary keeps its Phase-13 meaning: the full-month base
+    baseSalary: calc.monthlyBaseSalary,
+    monthlyBaseSalary: calc.monthlyBaseSalary,
+    payableBaseSalary: calc.payableBaseSalary,
+    prorationBasis: calc.prorationBasis,
+    prorationNumerator: calc.prorationNumerator,
+    prorationDenominator: calc.prorationDenominator,
     regularityBonus: calc.regularityBonus,
-    calculatedSalary: toAmount(calc.calculatedSalary),
-    leaveCount: calc.leaveCount,
-    offCount: calc.offCount,
+    calculatedSalary: calc.calculatedSalary,
+    leaveCount: calc.approvedLeaveDays,
+    offCount: calc.activeOffDays,
+    unpaidLeaveDays: calc.unpaidLeaveDays,
+    unpaidLeaveDeduction: calc.unpaidLeaveDeduction,
+    offDaysConsidered: calc.activeOffDays,
+    offDeduction: calc.offDeduction,
+    approvedOvertimeMinutes: calc.approvedOvertimeMinutes,
+    overtimeAmount: calc.overtimeAmount,
+    adjustmentsTotal: calc.adjustmentsTotal,
     salaryProfileId: eff?.id ?? null,
     bonusRecordId: bonusRow?.id ?? null,
-    calculationVersion: PAYROLL_CALC_VERSION,
+    calculationVersion: PAYROLL_CALC_VERSION_V2,
     calculatedByUserId: actor.id,
     calculatedAt: now,
     updatedAt: now,
@@ -326,8 +406,10 @@ export async function calculatePayrollForEmployee(
     ? {
         status: existing.status,
         baseSalary: existing.baseSalary,
+        payableBaseSalary: existing.payableBaseSalary,
         regularityBonus: existing.regularityBonus,
         calculatedSalary: existing.calculatedSalary,
+        calculationVersion: existing.calculationVersion,
       }
     : null;
 
@@ -358,15 +440,24 @@ export async function calculatePayrollForEmployee(
       before,
       after: {
         status: snapshot.status,
-        baseSalary: snapshot.baseSalary,
+        monthlyBaseSalary: snapshot.monthlyBaseSalary,
+        payableBaseSalary: snapshot.payableBaseSalary,
+        prorationBasis: snapshot.prorationBasis,
+        prorationNumerator: snapshot.prorationNumerator,
+        prorationDenominator: snapshot.prorationDenominator,
         regularityBonus: snapshot.regularityBonus,
+        unpaidLeaveDays: snapshot.unpaidLeaveDays,
+        unpaidLeaveDeduction: snapshot.unpaidLeaveDeduction,
+        offDaysConsidered: snapshot.offDaysConsidered,
+        offDeduction: snapshot.offDeduction,
+        approvedOvertimeMinutes: snapshot.approvedOvertimeMinutes,
+        overtimeAmount: snapshot.overtimeAmount,
+        adjustmentsTotal: snapshot.adjustmentsTotal,
         calculatedSalary: snapshot.calculatedSalary,
-        leaveCount: snapshot.leaveCount,
-        offCount: snapshot.offCount,
       },
       salaryProfileId: snapshot.salaryProfileId,
       bonusRecordId: snapshot.bonusRecordId,
-      version: PAYROLL_CALC_VERSION,
+      version: PAYROLL_CALC_VERSION_V2,
     },
     ip: meta.ip ?? null,
     userAgent: meta.userAgent ?? null,
@@ -518,4 +609,375 @@ export async function myPayroll(
     ? await repo.listPayrollRunsForUser(user.id, month, month)
     : await repo.listPayrollRunsForUser(user.id);
   return { rows: rows.map((r) => payrollDTO(r)) };
+}
+
+/* ============== Phase 16 — payroll input foundations ============= */
+
+/* ---- employment periods (join / exit dates) — Admin/HR ---- */
+
+export interface EmploymentPeriodInput {
+  startDate: string;
+  endDate?: string | null | undefined;
+  note?: string | undefined;
+}
+
+export async function setEmploymentPeriod(
+  actor: Pick<User, "id" | "role">,
+  targetUserId: number,
+  input: EmploymentPeriodInput,
+  meta: Meta = {},
+): Promise<{ id: number }> {
+  assertCanManagePayroll(actor.role as HrRole);
+  if (!ymdRegex(input.startDate))
+    throw new HttpError(400, "startDate must be YYYY-MM-DD", "bad_date");
+  if (input.endDate != null && input.endDate !== "" && !ymdRegex(input.endDate)) {
+    throw new HttpError(400, "endDate must be YYYY-MM-DD", "bad_date");
+  }
+  if (input.endDate && input.endDate < input.startDate) {
+    throw new HttpError(400, "endDate is before startDate", "bad_range");
+  }
+  if (!isDbConfigured()) throw new HttpError(503, "Database not configured", "db_unavailable");
+  const now = nowIST();
+  const id = await inputsRepo.insertEmploymentPeriod({
+    userId: targetUserId,
+    startDate: input.startDate,
+    endDate: input.endDate && input.endDate !== "" ? input.endDate : null,
+    active: true,
+    note: input.note?.trim().slice(0, 255) ?? null,
+    createdByUserId: actor.id,
+    updatedByUserId: actor.id,
+    createdAt: now,
+    updatedAt: now,
+  });
+  await recordAudit({
+    actorUserId: actor.id,
+    actorRole: actor.role,
+    action: "employment_period.create",
+    entityType: "employment_period",
+    entityId: id,
+    metadata: {
+      employee: targetUserId,
+      startDate: input.startDate,
+      endDate: input.endDate ?? null,
+    },
+    ip: meta.ip ?? null,
+    userAgent: meta.userAgent ?? null,
+  });
+  return { id };
+}
+
+export interface EmploymentPeriodDTO {
+  id: number;
+  startDate: string;
+  endDate: string | null;
+  active: boolean;
+  note: string | null;
+}
+
+export async function listEmploymentPeriods(
+  actor: Pick<User, "role">,
+  targetUserId: number,
+): Promise<{ dbUnavailable?: boolean; rows: EmploymentPeriodDTO[] }> {
+  assertCanManagePayroll(actor.role as HrRole);
+  if (!isDbConfigured()) return { dbUnavailable: true, rows: [] };
+  const rows = await inputsRepo.listEmploymentPeriodsForUser(targetUserId);
+  return {
+    rows: rows.map((p) => ({
+      id: p.id,
+      startDate: p.startDate,
+      endDate: p.endDate ?? null,
+      active: p.active,
+      note: p.note ?? null,
+    })),
+  };
+}
+
+/* ---- overtime records (FOUNDATION — no rate, amount is ₹0) ---- */
+
+export interface OvertimeInput {
+  userId: number;
+  workDate: string;
+  overtimeMinutes: number;
+  scheduledShiftStart?: string | undefined;
+  scheduledShiftEnd?: string | undefined;
+  actualLogout?: string | undefined;
+  reason?: string | undefined;
+}
+
+export async function recordOvertime(
+  actor: Pick<User, "id" | "role">,
+  input: OvertimeInput,
+  meta: Meta = {},
+): Promise<{ id: number }> {
+  assertCanManagePayroll(actor.role as HrRole);
+  if (!ymdRegex(input.workDate))
+    throw new HttpError(400, "workDate must be YYYY-MM-DD", "bad_date");
+  const minutes = Math.trunc(input.overtimeMinutes);
+  if (!Number.isFinite(minutes) || minutes < 0 || minutes > 24 * 60) {
+    throw new HttpError(400, "overtimeMinutes must be 0..1440", "bad_minutes");
+  }
+  if (!isDbConfigured()) throw new HttpError(503, "Database not configured", "db_unavailable");
+  const now = nowIST();
+  const id = await inputsRepo.insertOvertimeRecord({
+    userId: input.userId,
+    workDate: input.workDate,
+    periodMonth: input.workDate.slice(0, 7),
+    scheduledShiftStart: input.scheduledShiftStart ?? null,
+    scheduledShiftEnd: input.scheduledShiftEnd ?? null,
+    actualLogout: input.actualLogout ?? null,
+    overtimeMinutes: minutes,
+    status: "PENDING",
+    reason: input.reason?.trim().slice(0, 255) ?? null,
+    createdByUserId: actor.id,
+    createdAt: now,
+    updatedAt: now,
+  });
+  await recordAudit({
+    actorUserId: actor.id,
+    actorRole: actor.role,
+    action: "overtime.record",
+    entityType: "overtime_record",
+    entityId: id,
+    metadata: { employee: input.userId, workDate: input.workDate, minutes },
+    ip: meta.ip ?? null,
+    userAgent: meta.userAgent ?? null,
+  });
+  return { id };
+}
+
+export async function decideOvertime(
+  actor: Pick<User, "id" | "role">,
+  overtimeId: number,
+  decision: "APPROVED" | "REJECTED" | "VOID",
+  meta: Meta = {},
+): Promise<{ ok: true }> {
+  assertCanManagePayroll(actor.role as HrRole);
+  if (!isDbConfigured()) throw new HttpError(503, "Database not configured", "db_unavailable");
+  const row = await inputsRepo.getOvertimeRecordById(overtimeId);
+  if (!row) throw new HttpError(404, "Overtime record not found", "not_found");
+  const now = nowIST();
+  await inputsRepo.updateOvertimeRecord(overtimeId, {
+    status: decision,
+    ...(decision === "APPROVED"
+      ? { approvedByUserId: actor.id, approvedAt: now }
+      : { approvedByUserId: null, approvedAt: null }),
+    updatedAt: now,
+  });
+  await recordAudit({
+    actorUserId: actor.id,
+    actorRole: actor.role,
+    action: "overtime.decision",
+    entityType: "overtime_record",
+    entityId: overtimeId,
+    metadata: { employee: row.userId, decision, minutes: row.overtimeMinutes },
+    ip: meta.ip ?? null,
+    userAgent: meta.userAgent ?? null,
+  });
+  return { ok: true };
+}
+
+function overtimeDTO(r: {
+  id: number;
+  userId: number;
+  workDate: string;
+  periodMonth: string;
+  overtimeMinutes: number;
+  status: string;
+  reason: string | null;
+  approvedAt: string | null;
+}) {
+  return {
+    id: r.id,
+    userId: r.userId,
+    workDate: r.workDate,
+    month: r.periodMonth,
+    overtimeMinutes: r.overtimeMinutes,
+    status: r.status,
+    reason: r.reason ?? null,
+    approvedAt: r.approvedAt ?? null,
+    /** no overtime rate is configured — the amount is always ₹0 */
+    overtimeAmount: "0.00",
+  };
+}
+
+export async function listOvertime(
+  actor: Pick<User, "role">,
+  f: inputsRepo.OvertimeFilter,
+): Promise<{ dbUnavailable?: boolean; rows: ReturnType<typeof overtimeDTO>[] }> {
+  assertCanManagePayroll(actor.role as HrRole);
+  if (!isDbConfigured()) return { dbUnavailable: true, rows: [] };
+  const rows = await inputsRepo.listOvertimeRecords(f);
+  return { rows: rows.map(overtimeDTO) };
+}
+
+export async function myOvertime(
+  user: Pick<User, "id">,
+  month: string | undefined,
+): Promise<{ dbUnavailable?: boolean; rows: ReturnType<typeof overtimeDTO>[] }> {
+  if (!isDbConfigured()) return { dbUnavailable: true, rows: [] };
+  const rows = await inputsRepo.listOvertimeRecords({
+    userId: user.id,
+    ...(month ? { month } : {}),
+  });
+  return { rows: rows.map(overtimeDTO) };
+}
+
+/* ---- payroll adjustments (HR-typed amount + reason) ---- */
+
+export interface AdjustmentInput {
+  userId: number;
+  month: string;
+  kind: "EARNING" | "DEDUCTION";
+  label: string;
+  amount: number; // non-negative magnitude
+  reason?: string | undefined;
+}
+
+export async function addPayrollAdjustment(
+  actor: Pick<User, "id" | "role">,
+  input: AdjustmentInput,
+  meta: Meta = {},
+): Promise<{ id: number }> {
+  assertCanManagePayroll(actor.role as HrRole);
+  if (!monthRegex(input.month)) throw new HttpError(400, "month must be YYYY-MM", "bad_month");
+  if (!Number.isFinite(input.amount) || input.amount < 0 || input.amount > 100_000_000) {
+    throw new HttpError(400, "amount must be a magnitude between 0 and 100,000,000", "bad_amount");
+  }
+  if (!input.label.trim()) throw new HttpError(400, "label is required", "bad_label");
+  if (!isDbConfigured()) throw new HttpError(503, "Database not configured", "db_unavailable");
+  const now = nowIST();
+  const id = await inputsRepo.insertPayrollAdjustment({
+    userId: input.userId,
+    periodMonth: input.month,
+    kind: input.kind,
+    label: input.label.trim().slice(0, 120),
+    amount: toAmount(input.amount),
+    status: "ACTIVE",
+    reason: input.reason?.trim().slice(0, 255) ?? null,
+    createdByUserId: actor.id,
+    createdAt: now,
+    updatedAt: now,
+  });
+  await recordAudit({
+    actorUserId: actor.id,
+    actorRole: actor.role,
+    action: "payroll_adjustment.create",
+    entityType: "payroll_adjustment",
+    entityId: id,
+    metadata: {
+      employee: input.userId,
+      month: input.month,
+      kind: input.kind,
+      label: input.label.trim().slice(0, 120),
+      amount: toAmount(input.amount),
+    },
+    ip: meta.ip ?? null,
+    userAgent: meta.userAgent ?? null,
+  });
+  return { id };
+}
+
+export async function voidPayrollAdjustment(
+  actor: Pick<User, "id" | "role">,
+  adjustmentId: number,
+  meta: Meta = {},
+): Promise<{ ok: true }> {
+  assertCanManagePayroll(actor.role as HrRole);
+  if (!isDbConfigured()) throw new HttpError(503, "Database not configured", "db_unavailable");
+  const row = await inputsRepo.getPayrollAdjustmentById(adjustmentId);
+  if (!row) throw new HttpError(404, "Adjustment not found", "not_found");
+  const now = nowIST();
+  await inputsRepo.updatePayrollAdjustment(adjustmentId, {
+    status: "VOID",
+    voidedByUserId: actor.id,
+    updatedAt: now,
+  });
+  await recordAudit({
+    actorUserId: actor.id,
+    actorRole: actor.role,
+    action: "payroll_adjustment.void",
+    entityType: "payroll_adjustment",
+    entityId: adjustmentId,
+    metadata: { employee: row.userId, month: row.periodMonth },
+    ip: meta.ip ?? null,
+    userAgent: meta.userAgent ?? null,
+  });
+  return { ok: true };
+}
+
+function adjustmentDTO(a: {
+  id: number;
+  userId: number;
+  periodMonth: string;
+  kind: string;
+  label: string;
+  amount: string;
+  status: string;
+  reason: string | null;
+}) {
+  return {
+    id: a.id,
+    userId: a.userId,
+    month: a.periodMonth,
+    kind: a.kind,
+    label: a.label,
+    amount: a.amount,
+    signedAmount: a.kind === "DEDUCTION" ? `-${a.amount}` : a.amount,
+    status: a.status,
+    reason: a.reason ?? null,
+  };
+}
+
+/* ---- the "how was this salary calculated?" breakdown ---- */
+
+export interface PayrollBreakdown {
+  dbUnavailable?: boolean;
+  payroll: PayrollDTO | null;
+  adjustments: ReturnType<typeof adjustmentDTO>[];
+  overtime: ReturnType<typeof overtimeDTO>[];
+  roundingPolicy: string;
+  notes: string[];
+}
+
+export async function payrollBreakdown(
+  actor: Pick<User, "id" | "role">,
+  targetUserId: number,
+  month: string,
+): Promise<PayrollBreakdown> {
+  const isSelf = actor.id === targetUserId;
+  if (!isSelf) assertCanManagePayroll(actor.role as HrRole);
+  if (!monthRegex(month)) throw new HttpError(400, "month must be YYYY-MM", "bad_month");
+  if (!isDbConfigured()) {
+    return {
+      dbUnavailable: true,
+      payroll: null,
+      adjustments: [],
+      overtime: [],
+      roundingPolicy: PAYROLL_ROUNDING_POLICY,
+      notes: [],
+    };
+  }
+  const run = await repo.getPayrollRun(targetUserId, month);
+  const adjustments = (await inputsRepo.listPayrollAdjustments(targetUserId, month)).map(
+    adjustmentDTO,
+  );
+  const overtime = (await inputsRepo.listOvertimeRecords({ userId: targetUserId, month })).map(
+    overtimeDTO,
+  );
+
+  const notes: string[] = [];
+  if (run && run.prorationBasis == null) {
+    notes.push("Proration is not applied — the proration basis (denominator) is not configured.");
+  }
+  notes.push("Unpaid-leave deduction = ₹0: no per-day unpaid-leave rate is defined.");
+  notes.push("Off deduction = ₹0: no monetary value for an Off is defined.");
+  notes.push("Overtime amount = ₹0: no overtime rate is configured.");
+
+  return {
+    payroll: run ? payrollDTO(run) : null,
+    adjustments,
+    overtime,
+    roundingPolicy: PAYROLL_ROUNDING_POLICY,
+    notes,
+  };
 }

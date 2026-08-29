@@ -1,18 +1,27 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState, type FormEvent } from "react";
+import React, { useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState, PageHeader, SectionCard } from "@/components/officeverse/primitives";
 import {
+  useAddAdjustment,
+  useAdminOvertime,
   useAdminPayroll,
   useApprovePayroll,
   useCalculatePayroll,
+  useDecideOvertime,
+  useEmploymentPeriods,
   useLockPayroll,
+  useMyOvertime,
   useMyPayroll,
+  usePayrollBreakdown,
+  useRecordOvertime,
   useReopenPayroll,
   useSalaryProfiles,
+  useSetEmploymentPeriod,
   useSetSalaryProfile,
+  useVoidAdjustment,
   type AdminPayrollFilters,
   type PayrollStatus,
   type ProcessCode,
@@ -77,6 +86,7 @@ function PayrollPage() {
           <SalaryProfiles />
           <CalculateForm />
           <ManagerPayroll />
+          <PayrollInputs />
           <ManagerSalarySlips />
           <MonthlyDelivery />
         </>
@@ -327,6 +337,7 @@ function ManagerPayroll() {
   const lock = useLockPayroll();
   const reopen = useReopenPayroll();
   const generate = useGenerateSalarySlip();
+  const [breakdown, setBreakdown] = useState<{ userId: number; month: string } | null>(null);
 
   const set = (k: keyof AdminPayrollFilters, v: string) =>
     setFilters((p) => {
@@ -433,115 +444,160 @@ function ManagerPayroll() {
                 <th className="px-3 py-2">Employee</th>
                 <th className="px-3 py-2">Process</th>
                 <th className="px-3 py-2">Month</th>
-                <th className="px-3 py-2">Base salary</th>
+                <th className="px-3 py-2">Monthly base</th>
+                <th className="px-3 py-2">Payable base</th>
                 <th className="px-3 py-2">Leave</th>
+                <th className="px-3 py-2">Unpaid</th>
                 <th className="px-3 py-2">Off</th>
+                <th className="px-3 py-2">OT min</th>
+                <th className="px-3 py-2">Adjust.</th>
                 <th className="px-3 py-2">Regularity bonus</th>
-                <th className="px-3 py-2">Calculated salary</th>
+                <th className="px-3 py-2">Gross salary</th>
                 <th className="px-3 py-2">Status</th>
+                <th className="px-3 py-2">Breakdown</th>
                 <th className="px-3 py-2">Salary slip</th>
                 <th className="px-3 py-2" />
               </tr>
             </thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={`${r.userId}-${r.month}`} className="border-t border-border/60">
-                  <td className="px-3 py-2 font-medium">{r.employeeName ?? "—"}</td>
-                  <td className="px-3 py-2 text-muted-foreground">{r.process}</td>
-                  <td className="px-3 py-2 text-muted-foreground">{r.month}</td>
-                  <td className="px-3 py-2">{inr(r.baseSalary)}</td>
-                  <td className="px-3 py-2">{r.leaveCount}</td>
-                  <td className="px-3 py-2">{r.offCount}</td>
-                  <td className="px-3 py-2">₹{r.regularityBonus}</td>
-                  <td className="px-3 py-2 font-semibold">{inr(r.calculatedSalary)}</td>
-                  <td className={cn("px-3 py-2 font-semibold", STATUS_CLASS[r.status])}>
-                    {r.status}
-                  </td>
-                  <td className="px-3 py-2">
-                    {(r.status === "APPROVED" || r.status === "LOCKED") && r.payrollRunId ? (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="rounded-lg"
-                        disabled={generate.isPending}
-                        onClick={() =>
-                          generate.mutate(
-                            { payrollRunId: r.payrollRunId! },
-                            {
-                              onSuccess: (res) =>
-                                toast.success(
-                                  res.reused
-                                    ? "Salary slip already generated"
-                                    : `Salary slip v${res.slip.version} generated`,
-                                ),
-                              onError: (err) => toast.error(err.message || "Generate failed"),
-                            },
-                          )
-                        }
-                      >
-                        Generate
-                      </Button>
-                    ) : (
-                      <span className="text-xs text-muted-foreground">Approve/lock first</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2">
-                    <span className="flex flex-wrap gap-1">
-                      {(r.status === "DRAFT" || r.status === "CALCULATED") && r.userId ? (
+                <React.Fragment key={`${r.userId}-${r.month}`}>
+                  <tr className="border-t border-border/60">
+                    <td className="px-3 py-2 font-medium">{r.employeeName ?? "—"}</td>
+                    <td className="px-3 py-2 text-muted-foreground">{r.process}</td>
+                    <td className="px-3 py-2 text-muted-foreground">{r.month}</td>
+                    <td className="px-3 py-2">{inr(r.monthlyBaseSalary)}</td>
+                    <td className="px-3 py-2">
+                      {inr(r.payableBaseSalary)}
+                      {r.prorationBasis ? (
+                        <span className="block text-[10px] text-muted-foreground">
+                          {r.prorationNumerator}/{r.prorationDenominator} {r.prorationBasis}
+                        </span>
+                      ) : null}
+                    </td>
+                    <td className="px-3 py-2">{r.leaveCount}</td>
+                    <td className="px-3 py-2">{r.unpaidLeaveDays}</td>
+                    <td className="px-3 py-2">{r.offCount}</td>
+                    <td className="px-3 py-2">{r.approvedOvertimeMinutes}</td>
+                    <td className="px-3 py-2">{inr(r.adjustmentsTotal)}</td>
+                    <td className="px-3 py-2">₹{r.regularityBonus}</td>
+                    <td className="px-3 py-2 font-semibold">{inr(r.calculatedSalary)}</td>
+                    <td className={cn("px-3 py-2 font-semibold", STATUS_CLASS[r.status])}>
+                      {r.status}
+                    </td>
+                    <td className="px-3 py-2">
+                      {r.userId ? (
                         <Button
                           size="sm"
                           variant="ghost"
                           className="rounded-lg"
-                          disabled={calc.isPending}
-                          onClick={() => act(calc, r.userId!, r.month, "Recalculated")}
+                          onClick={() =>
+                            setBreakdown((b) =>
+                              b && b.userId === r.userId && b.month === r.month
+                                ? null
+                                : { userId: r.userId!, month: r.month },
+                            )
+                          }
                         >
-                          Recalculate
+                          Why?
                         </Button>
                       ) : null}
-                      {r.status === "CALCULATED" && r.userId ? (
-                        <Button
-                          size="sm"
-                          className="rounded-lg"
-                          disabled={approve.isPending}
-                          onClick={() => act(approve, r.userId!, r.month, "Approved")}
-                        >
-                          Approve
-                        </Button>
-                      ) : null}
-                      {r.status === "APPROVED" && r.userId ? (
-                        <Button
-                          size="sm"
-                          className="rounded-lg"
-                          disabled={lock.isPending}
-                          onClick={() => act(lock, r.userId!, r.month, "Locked")}
-                        >
-                          Lock
-                        </Button>
-                      ) : null}
-                      {(r.status === "APPROVED" || r.status === "LOCKED") && r.userId ? (
+                    </td>
+                    <td className="px-3 py-2">
+                      {(r.status === "APPROVED" || r.status === "LOCKED") && r.payrollRunId ? (
                         <Button
                           size="sm"
                           variant="ghost"
                           className="rounded-lg"
-                          disabled={reopen.isPending}
-                          onClick={() => {
-                            const reason = window.prompt("Reason for reopening this payroll run?");
-                            if (!reason || reason.trim().length < 3) return;
-                            reopen.mutate(
-                              { userId: r.userId!, month: r.month, reason: reason.trim() },
+                          disabled={generate.isPending}
+                          onClick={() =>
+                            generate.mutate(
+                              { payrollRunId: r.payrollRunId! },
                               {
-                                onSuccess: () => toast.success("Reopened (now CALCULATED)"),
-                                onError: (err) => toast.error(err.message || "Failed"),
+                                onSuccess: (res) =>
+                                  toast.success(
+                                    res.reused
+                                      ? "Salary slip already generated"
+                                      : `Salary slip v${res.slip.version} generated`,
+                                  ),
+                                onError: (err) => toast.error(err.message || "Generate failed"),
                               },
-                            );
-                          }}
+                            )
+                          }
                         >
-                          Reopen
+                          Generate
                         </Button>
-                      ) : null}
-                    </span>
-                  </td>
-                </tr>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">Approve/lock first</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2">
+                      <span className="flex flex-wrap gap-1">
+                        {(r.status === "DRAFT" || r.status === "CALCULATED") && r.userId ? (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="rounded-lg"
+                            disabled={calc.isPending}
+                            onClick={() => act(calc, r.userId!, r.month, "Recalculated")}
+                          >
+                            Recalculate
+                          </Button>
+                        ) : null}
+                        {r.status === "CALCULATED" && r.userId ? (
+                          <Button
+                            size="sm"
+                            className="rounded-lg"
+                            disabled={approve.isPending}
+                            onClick={() => act(approve, r.userId!, r.month, "Approved")}
+                          >
+                            Approve
+                          </Button>
+                        ) : null}
+                        {r.status === "APPROVED" && r.userId ? (
+                          <Button
+                            size="sm"
+                            className="rounded-lg"
+                            disabled={lock.isPending}
+                            onClick={() => act(lock, r.userId!, r.month, "Locked")}
+                          >
+                            Lock
+                          </Button>
+                        ) : null}
+                        {(r.status === "APPROVED" || r.status === "LOCKED") && r.userId ? (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="rounded-lg"
+                            disabled={reopen.isPending}
+                            onClick={() => {
+                              const reason = window.prompt(
+                                "Reason for reopening this payroll run?",
+                              );
+                              if (!reason || reason.trim().length < 3) return;
+                              reopen.mutate(
+                                { userId: r.userId!, month: r.month, reason: reason.trim() },
+                                {
+                                  onSuccess: () => toast.success("Reopened (now CALCULATED)"),
+                                  onError: (err) => toast.error(err.message || "Failed"),
+                                },
+                              );
+                            }}
+                          >
+                            Reopen
+                          </Button>
+                        ) : null}
+                      </span>
+                    </td>
+                  </tr>
+                  {breakdown && breakdown.userId === r.userId && breakdown.month === r.month ? (
+                    <tr className="bg-secondary/20">
+                      <td colSpan={14} className="px-3 py-3">
+                        <BreakdownPanel userId={r.userId!} month={r.month} />
+                      </td>
+                    </tr>
+                  ) : null}
+                </React.Fragment>
               ))}
             </tbody>
           </table>
@@ -551,10 +607,73 @@ function ManagerPayroll() {
   );
 }
 
+/* -------------------- calculation breakdown ---------------- */
+
+function BreakdownPanel({ userId, month }: { userId: number; month: string }) {
+  const q = usePayrollBreakdown(userId, month);
+  if (q.isLoading) return <p className="text-xs text-muted-foreground">Loading breakdown…</p>;
+  const d = q.data;
+  if (!d || d.dbUnavailable || !d.payroll) {
+    return <p className="text-xs text-muted-foreground">No calculated payroll for this month.</p>;
+  }
+  const p = d.payroll;
+  const line = (k: string, v: string, strong = false) => (
+    <div className="flex justify-between gap-4 py-0.5">
+      <span className="text-muted-foreground">{k}</span>
+      <span className={strong ? "font-semibold" : ""}>{v}</span>
+    </div>
+  );
+  return (
+    <div className="grid gap-4 text-xs sm:grid-cols-2">
+      <div className="rounded-lg border border-border bg-card p-3">
+        <p className="mb-1 font-semibold uppercase text-muted-foreground">
+          How this salary was calculated
+        </p>
+        {line("Monthly base salary", inr(p.monthlyBaseSalary))}
+        {line(
+          `Payable base${p.prorationBasis ? ` (${p.prorationNumerator}/${p.prorationDenominator} ${p.prorationBasis})` : " (full month)"}`,
+          inr(p.payableBaseSalary),
+        )}
+        {line(`+ Regularity bonus`, `₹${p.regularityBonus}`)}
+        {line(`+ Overtime (${p.approvedOvertimeMinutes} min)`, inr(p.overtimeAmount))}
+        {line("+ Adjustments", inr(p.adjustmentsTotal))}
+        {line(`− Unpaid leave (${p.unpaidLeaveDays} d)`, inr(p.unpaidLeaveDeduction))}
+        {line(`− Off (${p.offDaysConsidered})`, inr(p.offDeduction))}
+        {line("= Gross (before statutory)", inr(p.calculatedSalary), true)}
+        <p className="mt-2 text-[11px] text-muted-foreground">
+          Calc version {p.calculationVersion}. {d.roundingPolicy}
+        </p>
+      </div>
+      <div className="rounded-lg border border-border bg-card p-3">
+        <p className="mb-1 font-semibold uppercase text-muted-foreground">Notes</p>
+        <ul className="list-disc space-y-0.5 pl-4 text-muted-foreground">
+          {d.notes.map((n, i) => (
+            <li key={i}>{n}</li>
+          ))}
+        </ul>
+        {d.adjustments.length > 0 ? (
+          <>
+            <p className="mb-1 mt-2 font-semibold uppercase text-muted-foreground">Adjustments</p>
+            <ul className="space-y-0.5">
+              {d.adjustments.map((a) => (
+                <li key={a.id} className={a.status === "VOID" ? "line-through opacity-60" : ""}>
+                  {a.kind === "DEDUCTION" ? "−" : "+"}
+                  {inr(a.amount)} · {a.label} ({a.status})
+                </li>
+              ))}
+            </ul>
+          </>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 /* ========================= employee view ==================== */
 
 function EmployeePayroll() {
   const [month, setMonth] = useState("");
+  const [open, setOpen] = useState<string | null>(null);
   const q = useMyPayroll(month || undefined);
   const rows = q.data?.rows ?? [];
   return (
@@ -588,32 +707,351 @@ function EmployeePayroll() {
             <thead className="bg-secondary/60 text-left text-xs uppercase">
               <tr>
                 <th className="px-3 py-2">Month</th>
-                <th className="px-3 py-2">Base salary</th>
-                <th className="px-3 py-2">Leave days</th>
-                <th className="px-3 py-2">Off days</th>
+                <th className="px-3 py-2">Monthly base</th>
+                <th className="px-3 py-2">Payable base</th>
+                <th className="px-3 py-2">Leave / Unpaid</th>
+                <th className="px-3 py-2">Off</th>
+                <th className="px-3 py-2">Overtime</th>
                 <th className="px-3 py-2">Regularity bonus</th>
-                <th className="px-3 py-2">Calculated salary</th>
+                <th className="px-3 py-2">Gross salary</th>
                 <th className="px-3 py-2">Status</th>
+                <th className="px-3 py-2" />
               </tr>
             </thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={r.month} className="border-t border-border/60">
-                  <td className="px-3 py-2 text-muted-foreground">{r.month}</td>
-                  <td className="px-3 py-2">{inr(r.baseSalary)}</td>
-                  <td className="px-3 py-2">{r.leaveCount}</td>
-                  <td className="px-3 py-2">{r.offCount}</td>
-                  <td className="px-3 py-2">₹{r.regularityBonus}</td>
-                  <td className="px-3 py-2 font-semibold">{inr(r.calculatedSalary)}</td>
-                  <td className={cn("px-3 py-2 font-semibold", STATUS_CLASS[r.status])}>
-                    {r.status}
-                  </td>
-                </tr>
+                <React.Fragment key={r.month}>
+                  <tr className="border-t border-border/60">
+                    <td className="px-3 py-2 text-muted-foreground">{r.month}</td>
+                    <td className="px-3 py-2">{inr(r.monthlyBaseSalary)}</td>
+                    <td className="px-3 py-2">{inr(r.payableBaseSalary)}</td>
+                    <td className="px-3 py-2">
+                      {r.leaveCount} / {r.unpaidLeaveDays}
+                    </td>
+                    <td className="px-3 py-2">{r.offCount}</td>
+                    <td className="px-3 py-2">{r.approvedOvertimeMinutes} min</td>
+                    <td className="px-3 py-2">₹{r.regularityBonus}</td>
+                    <td className="px-3 py-2 font-semibold">{inr(r.calculatedSalary)}</td>
+                    <td className={cn("px-3 py-2 font-semibold", STATUS_CLASS[r.status])}>
+                      {r.status}
+                    </td>
+                    <td className="px-3 py-2">
+                      {r.userId ? (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="rounded-lg"
+                          onClick={() => setOpen((o) => (o === r.month ? null : r.month))}
+                        >
+                          Why?
+                        </Button>
+                      ) : null}
+                    </td>
+                  </tr>
+                  {open === r.month && r.userId ? (
+                    <tr className="bg-secondary/20">
+                      <td colSpan={10} className="px-3 py-3">
+                        <BreakdownPanel userId={r.userId} month={r.month} />
+                      </td>
+                    </tr>
+                  ) : null}
+                </React.Fragment>
               ))}
             </tbody>
           </table>
         </div>
       )}
+    </SectionCard>
+  );
+}
+
+/* =================== payroll input foundations ============= */
+
+function PayrollInputs() {
+  const [uid, setUid] = useState("");
+  const userId = Number(uid) > 0 ? Number(uid) : null;
+  const [month, setMonth] = useState(thisMonth());
+
+  const periods = useEmploymentPeriods(userId);
+  const setPeriod = useSetEmploymentPeriod();
+  const recordOt = useRecordOvertime();
+  const decideOt = useDecideOvertime();
+  const otList = useAdminOvertime({ status: "PENDING" });
+  const addAdj = useAddAdjustment();
+  const voidAdj = useVoidAdjustment();
+
+  const [pf, setPf] = useState({ startDate: "", endDate: "", note: "" });
+  const [otf, setOtf] = useState({ workDate: "", minutes: "", reason: "" });
+  const [af, setAf] = useState({ kind: "DEDUCTION", label: "", amount: "", reason: "" });
+
+  return (
+    <SectionCard title="Payroll inputs (Admin / HR)">
+      <p className="mb-3 text-xs text-muted-foreground">
+        Employment dates drive proration (only when a proration basis is configured). Overtime is
+        recorded + approved but has <strong>no rate</strong>, so its payroll amount is ₹0.
+        Adjustments are explicit HR-entered amounts with a reason.
+      </p>
+      <div className="mb-4 flex flex-wrap items-end gap-2">
+        <label className="text-sm">
+          <span className="mb-1 block text-xs font-semibold uppercase text-muted-foreground">
+            Employee user ID
+          </span>
+          <input
+            className="w-28 rounded-lg border border-border bg-card px-2 py-1.5 text-sm"
+            value={uid}
+            inputMode="numeric"
+            onChange={(e) => setUid(e.target.value.replace(/\D/g, ""))}
+          />
+        </label>
+        <label className="text-sm">
+          <span className="mb-1 block text-xs font-semibold uppercase text-muted-foreground">
+            Month
+          </span>
+          <input
+            type="month"
+            className="rounded-lg border border-border bg-card px-2 py-1.5 text-sm"
+            value={month}
+            onChange={(e) => setMonth(e.target.value)}
+          />
+        </label>
+      </div>
+
+      {userId ? (
+        <div className="grid gap-4 lg:grid-cols-3">
+          {/* employment period */}
+          <div className="rounded-lg border border-border p-3">
+            <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">
+              Employment period
+            </p>
+            <div className="space-y-2 text-sm">
+              <input
+                type="date"
+                aria-label="Start date"
+                className="w-full rounded-lg border border-border bg-card px-2 py-1.5"
+                value={pf.startDate}
+                onChange={(e) => setPf({ ...pf, startDate: e.target.value })}
+              />
+              <input
+                type="date"
+                aria-label="End date (optional)"
+                className="w-full rounded-lg border border-border bg-card px-2 py-1.5"
+                value={pf.endDate}
+                onChange={(e) => setPf({ ...pf, endDate: e.target.value })}
+              />
+              <Button
+                size="sm"
+                className="rounded-lg"
+                disabled={setPeriod.isPending || !pf.startDate}
+                onClick={() =>
+                  setPeriod.mutate(
+                    {
+                      userId,
+                      startDate: pf.startDate,
+                      ...(pf.endDate ? { endDate: pf.endDate } : {}),
+                      ...(pf.note ? { note: pf.note } : {}),
+                    },
+                    {
+                      onSuccess: () => {
+                        toast.success("Employment period saved");
+                        setPf({ startDate: "", endDate: "", note: "" });
+                      },
+                      onError: (e) => toast.error(e.message || "Failed"),
+                    },
+                  )
+                }
+              >
+                Add period
+              </Button>
+              <ul className="mt-1 space-y-0.5 text-xs text-muted-foreground">
+                {(periods.data?.rows ?? []).map((p) => (
+                  <li key={p.id}>
+                    {p.startDate} → {p.endDate ?? "current"} {p.active ? "" : "(inactive)"}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+
+          {/* overtime */}
+          <div className="rounded-lg border border-border p-3">
+            <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">
+              Record overtime
+            </p>
+            <div className="space-y-2 text-sm">
+              <input
+                type="date"
+                aria-label="Work date"
+                className="w-full rounded-lg border border-border bg-card px-2 py-1.5"
+                value={otf.workDate}
+                onChange={(e) => setOtf({ ...otf, workDate: e.target.value })}
+              />
+              <input
+                aria-label="Overtime minutes"
+                placeholder="minutes"
+                inputMode="numeric"
+                className="w-full rounded-lg border border-border bg-card px-2 py-1.5"
+                value={otf.minutes}
+                onChange={(e) => setOtf({ ...otf, minutes: e.target.value.replace(/\D/g, "") })}
+              />
+              <Button
+                size="sm"
+                className="rounded-lg"
+                disabled={recordOt.isPending || !otf.workDate || !otf.minutes}
+                onClick={() =>
+                  recordOt.mutate(
+                    {
+                      userId,
+                      workDate: otf.workDate,
+                      overtimeMinutes: Number(otf.minutes),
+                      ...(otf.reason ? { reason: otf.reason } : {}),
+                    },
+                    {
+                      onSuccess: () => {
+                        toast.success("Overtime recorded (PENDING)");
+                        setOtf({ workDate: "", minutes: "", reason: "" });
+                      },
+                      onError: (e) => toast.error(e.message || "Failed"),
+                    },
+                  )
+                }
+              >
+                Record
+              </Button>
+            </div>
+          </div>
+
+          {/* adjustment */}
+          <div className="rounded-lg border border-border p-3">
+            <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">
+              Payroll adjustment ({month})
+            </p>
+            <div className="space-y-2 text-sm">
+              <select
+                className="w-full rounded-lg border border-border bg-card px-2 py-1.5"
+                value={af.kind}
+                onChange={(e) => setAf({ ...af, kind: e.target.value })}
+              >
+                <option value="DEDUCTION">Deduction (−)</option>
+                <option value="EARNING">Earning (+)</option>
+              </select>
+              <input
+                placeholder="label"
+                className="w-full rounded-lg border border-border bg-card px-2 py-1.5"
+                value={af.label}
+                onChange={(e) => setAf({ ...af, label: e.target.value })}
+              />
+              <input
+                placeholder="amount (₹)"
+                inputMode="decimal"
+                className="w-full rounded-lg border border-border bg-card px-2 py-1.5"
+                value={af.amount}
+                onChange={(e) => setAf({ ...af, amount: e.target.value })}
+              />
+              <Button
+                size="sm"
+                className="rounded-lg"
+                disabled={addAdj.isPending || !af.label || !af.amount}
+                onClick={() =>
+                  addAdj.mutate(
+                    {
+                      userId,
+                      month,
+                      kind: af.kind as "EARNING" | "DEDUCTION",
+                      label: af.label,
+                      amount: Number(af.amount),
+                      ...(af.reason ? { reason: af.reason } : {}),
+                    },
+                    {
+                      onSuccess: () => {
+                        toast.success("Adjustment added — recalculate payroll to apply");
+                        setAf({ kind: "DEDUCTION", label: "", amount: "", reason: "" });
+                      },
+                      onError: (e) => toast.error(e.message || "Failed"),
+                    },
+                  )
+                }
+              >
+                Add adjustment
+              </Button>
+              <p className="text-[10px] text-muted-foreground">
+                Void via the breakdown panel. Recalculate the run to apply changes.
+              </p>
+              <button
+                type="button"
+                className="text-[10px] underline"
+                onClick={() => {
+                  const id = window.prompt("Adjustment id to VOID?");
+                  if (id && Number(id) > 0)
+                    voidAdj.mutate(
+                      { adjustmentId: Number(id) },
+                      {
+                        onSuccess: () => toast.success("Voided"),
+                        onError: (e) => toast.error(e.message),
+                      },
+                    );
+                }}
+              >
+                void an adjustment by id
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground">Enter an employee user ID to manage inputs.</p>
+      )}
+
+      {/* pending overtime approvals */}
+      <div className="mt-4">
+        <p className="mb-1 text-xs font-semibold uppercase text-muted-foreground">
+          Pending overtime approvals
+        </p>
+        {(otList.data?.rows ?? []).length === 0 ? (
+          <p className="text-xs text-muted-foreground">Nothing pending.</p>
+        ) : (
+          <ul className="space-y-1 text-xs">
+            {(otList.data?.rows ?? []).map((o) => (
+              <li key={o.id} className="flex flex-wrap items-center gap-2">
+                user #{o.userId} · {o.workDate} · {o.overtimeMinutes} min · amount{" "}
+                {inr(o.overtimeAmount)}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="rounded-lg"
+                  disabled={decideOt.isPending}
+                  onClick={() =>
+                    decideOt.mutate(
+                      { overtimeId: o.id, decision: "APPROVED" },
+                      {
+                        onSuccess: () => toast.success("Approved"),
+                        onError: (e) => toast.error(e.message),
+                      },
+                    )
+                  }
+                >
+                  Approve
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="rounded-lg"
+                  disabled={decideOt.isPending}
+                  onClick={() =>
+                    decideOt.mutate(
+                      { overtimeId: o.id, decision: "REJECTED" },
+                      {
+                        onSuccess: () => toast.success("Rejected"),
+                        onError: (e) => toast.error(e.message),
+                      },
+                    )
+                  }
+                >
+                  Reject
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </SectionCard>
   );
 }

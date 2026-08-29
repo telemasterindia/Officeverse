@@ -874,6 +874,11 @@ export const leaveRequests = mysqlTable(
       .references(() => users.id, { onDelete: "restrict", onUpdate: "cascade" }),
     /** simple extensible label — not a fixed catalogue */
     leaveType: varchar("leave_type", { length: 40 }).notNull().default("general"),
+    /** Phase 16 foundation: paid (default) vs unpaid. Regularity-Bonus
+     *  eligibility is UNAFFECTED — any approved leave still forfeits the bonus.
+     *  The per-day monetary deduction rate for an unpaid day is an undefined
+     *  business decision, so payroll currently deducts ₹0 for unpaid leave. */
+    unpaid: boolean("unpaid").notNull().default(false),
     startDate: dcol("start_date").notNull(),
     endDate: dcol("end_date").notNull(),
     status: mysqlEnum("status", LEAVE_STATUSES).notNull().default("PENDING"),
@@ -1114,6 +1119,35 @@ export const payrollRuns = mysqlTable(
       .default("0.00"),
     leaveCount: int("leave_count", { unsigned: true }).notNull().default(0),
     offCount: int("off_count", { unsigned: true }).notNull().default(0),
+    /* ---- Phase 16 breakdown (additive; every rate defaults to 0 until the
+     *      corresponding business rule is defined) ---- */
+    /** full-month base (== base_salary unless proration applies) */
+    monthlyBaseSalary: decimal("monthly_base_salary", { precision: 12, scale: 2 })
+      .notNull()
+      .default("0.00"),
+    /** base salary actually payable after proration */
+    payableBaseSalary: decimal("payable_base_salary", { precision: 12, scale: 2 })
+      .notNull()
+      .default("0.00"),
+    /** null = no proration applied (full month); e.g. "CALENDAR_DAYS" */
+    prorationBasis: varchar("proration_basis", { length: 24 }),
+    prorationNumerator: int("proration_numerator", { unsigned: true }).notNull().default(0),
+    prorationDenominator: int("proration_denominator", { unsigned: true }).notNull().default(0),
+    unpaidLeaveDays: int("unpaid_leave_days", { unsigned: true }).notNull().default(0),
+    unpaidLeaveDeduction: decimal("unpaid_leave_deduction", { precision: 12, scale: 2 })
+      .notNull()
+      .default("0.00"),
+    offDaysConsidered: int("off_days_considered", { unsigned: true }).notNull().default(0),
+    offDeduction: decimal("off_deduction", { precision: 12, scale: 2 }).notNull().default("0.00"),
+    approvedOvertimeMinutes: int("approved_overtime_minutes", { unsigned: true })
+      .notNull()
+      .default(0),
+    overtimeAmount: decimal("overtime_amount", { precision: 12, scale: 2 })
+      .notNull()
+      .default("0.00"),
+    adjustmentsTotal: decimal("adjustments_total", { precision: 12, scale: 2 })
+      .notNull()
+      .default("0.00"),
     /** provenance — which config / bonus row produced this snapshot */
     salaryProfileId: bigint("salary_profile_id", { mode: "number", unsigned: true }).references(
       () => salaryProfiles.id,
@@ -1157,6 +1191,128 @@ export const payrollRuns = mysqlTable(
     userMonthUq: unique("payroll_runs_user_month_uq").on(t.userId, t.periodMonth),
     monthIdx: index("payroll_runs_month_idx").on(t.periodMonth),
     statusIdx: index("payroll_runs_status_idx").on(t.status),
+  }),
+);
+
+/* ================================================================== *
+ *  Phase 16 payroll-input FOUNDATIONS (additive; no monetary rate is  *
+ *  invented — the service supplies 0 until each rule is defined).      *
+ * ================================================================== */
+
+/* -- 24a · employment_periods -------------------------------------- *
+ *  Historical join / exit dates. Proration reads these (never the     *
+ *  current date). NO field for this existed before Phase 16.          */
+export const employmentPeriods = mysqlTable(
+  "employment_periods",
+  {
+    id: bigint("id", { mode: "number", unsigned: true }).autoincrement().primaryKey(),
+    userId: int("user_id", { unsigned: true })
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    /** inclusive first day worked */
+    startDate: dcol("start_date").notNull(),
+    /** inclusive last day worked, null = still employed */
+    endDate: dcol("end_date"),
+    active: boolean("active").notNull().default(true),
+    note: varchar("note", { length: 255 }),
+    createdByUserId: int("created_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    updatedByUserId: int("updated_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    createdAt: dt("created_at").notNull(),
+    updatedAt: dt("updated_at").notNull(),
+  },
+  (t) => ({
+    userStartUq: unique("employment_periods_user_start_uq").on(t.userId, t.startDate),
+    userIdx: index("employment_periods_user_idx").on(t.userId, t.startDate),
+  }),
+);
+
+/* -- 24b · overtime_records -------------------------------------- *
+ *  FOUNDATION ONLY. Duration is recorded + approved; there is no      *
+ *  overtime RATE, so payroll snapshots minutes and pays ₹0.          */
+export const OVERTIME_STATUSES = ["PENDING", "APPROVED", "REJECTED", "VOID"] as const;
+
+export const overtimeRecords = mysqlTable(
+  "overtime_records",
+  {
+    id: bigint("id", { mode: "number", unsigned: true }).autoincrement().primaryKey(),
+    userId: int("user_id", { unsigned: true })
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    workDate: dcol("work_date").notNull(),
+    /** calendar payroll month the OT belongs to, "YYYY-MM" */
+    periodMonth: varchar("period_month", { length: 7 }).notNull(),
+    scheduledShiftStart: varchar("scheduled_shift_start", { length: 5 }),
+    scheduledShiftEnd: varchar("scheduled_shift_end", { length: 5 }),
+    /** IST wall-clock "YYYY-MM-DD HH:MM:SS" */
+    actualLogout: dt("actual_logout"),
+    overtimeMinutes: int("overtime_minutes", { unsigned: true }).notNull().default(0),
+    status: mysqlEnum("status", OVERTIME_STATUSES).notNull().default("PENDING"),
+    reason: varchar("reason", { length: 255 }),
+    createdByUserId: int("created_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    approvedByUserId: int("approved_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    approvedAt: dt("approved_at"),
+    /** set when a payroll run consumed this record */
+    payrollRunId: bigint("payroll_run_id", { mode: "number", unsigned: true }).references(
+      () => payrollRuns.id,
+      { onDelete: "set null", onUpdate: "cascade" },
+    ),
+    createdAt: dt("created_at").notNull(),
+    updatedAt: dt("updated_at").notNull(),
+  },
+  (t) => ({
+    userDateUq: unique("overtime_records_user_date_uq").on(t.userId, t.workDate),
+    monthStatusIdx: index("overtime_records_month_status_idx").on(t.periodMonth, t.status),
+    userMonthIdx: index("overtime_records_user_month_idx").on(t.userId, t.periodMonth),
+  }),
+);
+
+/* -- 24c · payroll_adjustments --------------------------------- *
+ *  Explicit, Admin/HR-entered, labelled monetary adjustment for a    *
+ *  user + month. Each amount is TYPED BY HR (not invented). Signed:   *
+ *  EARNING adds, DEDUCTION subtracts.                                */
+export const PAYROLL_ADJUSTMENT_KINDS = ["EARNING", "DEDUCTION"] as const;
+export const PAYROLL_ADJUSTMENT_STATUSES = ["ACTIVE", "VOID"] as const;
+
+export const payrollAdjustments = mysqlTable(
+  "payroll_adjustments",
+  {
+    id: bigint("id", { mode: "number", unsigned: true }).autoincrement().primaryKey(),
+    userId: int("user_id", { unsigned: true })
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    periodMonth: varchar("period_month", { length: 7 }).notNull(),
+    kind: mysqlEnum("kind", PAYROLL_ADJUSTMENT_KINDS).notNull(),
+    label: varchar("label", { length: 120 }).notNull(),
+    /** always stored as a NON-NEGATIVE magnitude; `kind` carries the sign */
+    amount: decimal("amount", { precision: 12, scale: 2 }).notNull().default("0.00"),
+    status: mysqlEnum("status", PAYROLL_ADJUSTMENT_STATUSES).notNull().default("ACTIVE"),
+    reason: varchar("reason", { length: 255 }),
+    createdByUserId: int("created_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    voidedByUserId: int("voided_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    createdAt: dt("created_at").notNull(),
+    updatedAt: dt("updated_at").notNull(),
+  },
+  (t) => ({
+    userMonthIdx: index("payroll_adjustments_user_month_idx").on(t.userId, t.periodMonth),
+    statusIdx: index("payroll_adjustments_status_idx").on(t.status),
   }),
 );
 
@@ -1408,6 +1564,12 @@ export type SalaryProfile = typeof salaryProfiles.$inferSelect;
 export type NewSalaryProfile = typeof salaryProfiles.$inferInsert;
 export type PayrollRun = typeof payrollRuns.$inferSelect;
 export type NewPayrollRun = typeof payrollRuns.$inferInsert;
+export type EmploymentPeriod = typeof employmentPeriods.$inferSelect;
+export type NewEmploymentPeriod = typeof employmentPeriods.$inferInsert;
+export type OvertimeRecord = typeof overtimeRecords.$inferSelect;
+export type NewOvertimeRecord = typeof overtimeRecords.$inferInsert;
+export type PayrollAdjustment = typeof payrollAdjustments.$inferSelect;
+export type NewPayrollAdjustment = typeof payrollAdjustments.$inferInsert;
 export type SalarySlip = typeof salarySlips.$inferSelect;
 export type NewSalarySlip = typeof salarySlips.$inferInsert;
 export type SalarySlipSend = typeof salarySlipSends.$inferSelect;

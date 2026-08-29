@@ -14,8 +14,18 @@
  * The regularity bonus is NOT recomputed here — the caller passes the
  * authoritative Phase-12 result in.
  */
+import { paiseToAmount, sumPaise, toPaise, toSignedPaise } from "./payroll-money";
+import {
+  prorateBaseSalary,
+  type EmploymentPeriodLike,
+  type ProrationBasis,
+} from "./payroll-proration";
 
 export const PAYROLL_CALC_VERSION = "v1";
+/** Phase 16 breakdown calc — proration + unpaid-leave / Off / overtime /
+ *  adjustment TERMS present (values default to 0 until their business rate is
+ *  configured). Old "v1" rows keep their meaning. */
+export const PAYROLL_CALC_VERSION_V2 = "v2";
 
 export const PAYROLL_STATUSES = ["DRAFT", "CALCULATED", "APPROVED", "LOCKED"] as const;
 export type PayrollStatus = (typeof PAYROLL_STATUSES)[number];
@@ -76,6 +86,127 @@ export function calculatePayroll(input: PayrollCalcInput): PayrollCalcResult {
     leaveCount,
     offCount,
     calculationVersion: PAYROLL_CALC_VERSION,
+  };
+}
+
+/* ================= Phase 16 — breakdown calculation ============= *
+ * Composes the monthly gross-before-statutory from explicit inputs.
+ *
+ * FROZEN behaviour: with every Phase-16 term at its default (no proration
+ * basis, no unpaid-leave rate, no Off rate, no overtime rate, no adjustments)
+ * this is EXACTLY the Phase-13 result: gross = baseSalary + regularityBonus.
+ *
+ * Terms whose monetary RATE is an undefined business decision
+ * (unpaidLeaveDeduction, offDeduction, overtimeAmount) are accepted as
+ * already-resolved PAISE values from the service; the service passes 0 until a
+ * rate is configured — this engine never invents a rate.
+ * -------------------------------------------------------------------- */
+
+export interface MonthlyPayrollInput {
+  month: string; // "YYYY-MM"
+  /** full-month base salary in rupees (from the effective-dated profile) */
+  monthlyBaseSalary: number;
+  /** authoritative ₹ Regularity Bonus for the month (Phase-12) — 0 or 1000 */
+  regularityBonus: number;
+  /** proration inputs — omit basis to keep the full month payable */
+  employmentPeriods?: EmploymentPeriodLike[];
+  prorationBasis?: ProrationBasis | null | undefined;
+  /** authoritative counts (snapshot / provenance) */
+  approvedLeaveDays?: number;
+  unpaidLeaveDays?: number;
+  activeOffDays?: number;
+  approvedOvertimeMinutes?: number;
+  /** already-resolved deduction/earning amounts in RUPEES (service supplies 0
+   *  until the business rate exists). unpaidLeaveDeduction / offDeduction are
+   *  positive numbers that REDUCE gross; overtimeAmount / adjustmentsTotal are
+   *  signed and ADD to gross. */
+  unpaidLeaveDeduction?: number;
+  offDeduction?: number;
+  overtimeAmount?: number;
+  adjustmentsTotal?: number;
+}
+
+export interface MonthlyPayrollResult {
+  month: string;
+  monthlyBaseSalary: string;
+  payableBaseSalary: string;
+  prorationApplied: boolean;
+  prorationBasis: string | null;
+  prorationNumerator: number;
+  prorationDenominator: number;
+  regularityBonus: number;
+  approvedLeaveDays: number;
+  unpaidLeaveDays: number;
+  unpaidLeaveDeduction: string;
+  activeOffDays: number;
+  offDeduction: string;
+  approvedOvertimeMinutes: number;
+  overtimeAmount: string;
+  adjustmentsTotal: string;
+  /** gross before statutory deductions */
+  calculatedSalary: string;
+  calculationVersion: string;
+}
+
+export function calculateMonthlyPayroll(input: MonthlyPayrollInput): MonthlyPayrollResult {
+  if (!/^\d{4}-\d{2}$/.test(input.month)) throw new Error("month must be YYYY-MM");
+  if (!Number.isFinite(input.monthlyBaseSalary) || input.monthlyBaseSalary < 0) {
+    throw new Error("monthlyBaseSalary must be a finite number >= 0");
+  }
+  if (!Number.isFinite(input.regularityBonus) || input.regularityBonus < 0) {
+    throw new Error("regularityBonus must be a finite number >= 0");
+  }
+  for (const [k, v] of [
+    ["unpaidLeaveDeduction", input.unpaidLeaveDeduction],
+    ["offDeduction", input.offDeduction],
+  ] as const) {
+    if (v != null && (!Number.isFinite(v) || v < 0)) {
+      throw new Error(`${k} must be a finite number >= 0`);
+    }
+  }
+
+  const monthlyBasePaise = toPaise(input.monthlyBaseSalary);
+  const proration = prorateBaseSalary({
+    monthlyBasePaise,
+    month: input.month,
+    employmentPeriods: input.employmentPeriods ?? [],
+    basis: input.prorationBasis ?? null,
+  });
+
+  const regularityBonusPaise = toPaise(Math.trunc(input.regularityBonus)); // ₹ integer
+  const unpaidDeductionPaise = toPaise(input.unpaidLeaveDeduction ?? 0);
+  const offDeductionPaise = toPaise(input.offDeduction ?? 0);
+  const overtimePaise = toSignedPaise(input.overtimeAmount ?? 0);
+  const adjustmentsPaise = toSignedPaise(input.adjustmentsTotal ?? 0);
+
+  const grossPaise = sumPaise(
+    proration.payableBasePaise,
+    regularityBonusPaise,
+    overtimePaise,
+    adjustmentsPaise,
+    -unpaidDeductionPaise,
+    -offDeductionPaise,
+  );
+
+  return {
+    month: input.month,
+    monthlyBaseSalary: paiseToAmount(monthlyBasePaise),
+    payableBaseSalary: paiseToAmount(proration.payableBasePaise),
+    prorationApplied: proration.applied,
+    prorationBasis: proration.basis,
+    prorationNumerator: proration.numerator,
+    prorationDenominator: proration.denominator,
+    regularityBonus: Math.trunc(input.regularityBonus),
+    approvedLeaveDays: Math.max(0, Math.trunc(input.approvedLeaveDays ?? 0)),
+    unpaidLeaveDays: Math.max(0, Math.trunc(input.unpaidLeaveDays ?? 0)),
+    unpaidLeaveDeduction: paiseToAmount(unpaidDeductionPaise),
+    activeOffDays: Math.max(0, Math.trunc(input.activeOffDays ?? 0)),
+    offDeduction: paiseToAmount(offDeductionPaise),
+    approvedOvertimeMinutes: Math.max(0, Math.trunc(input.approvedOvertimeMinutes ?? 0)),
+    overtimeAmount: paiseToAmount(overtimePaise),
+    adjustmentsTotal: paiseToAmount(adjustmentsPaise),
+    calculatedSalary: paiseToAmount(grossPaise < 0 ? 0 : grossPaise),
+    calculationVersion: PAYROLL_CALC_VERSION_V2,
   };
 }
 

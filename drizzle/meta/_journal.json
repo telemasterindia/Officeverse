@@ -71,6 +71,13 @@
       "when": 1788014820409,
       "tag": "0009_salary_slips_email",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "5",
+      "when": 1788017585978,
+      "tag": "0010_payroll_breakdown_inputs",
+      "breakpoints": true
     }
   ]
 }

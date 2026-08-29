@@ -19,6 +19,7 @@ describe("payroll endpoints — placement & trust boundary", () => {
     const fns = [...payrollFns.matchAll(/export const (\w+Fn)\b/g)].map((m) => m[1]);
     expect(fns.sort()).toEqual(
       [
+        // Phase 13
         "adminPayrollFn",
         "approvePayrollFn",
         "calculatePayrollFn",
@@ -27,6 +28,16 @@ describe("payroll endpoints — placement & trust boundary", () => {
         "reopenPayrollFn",
         "salaryProfilesFn",
         "setSalaryProfileFn",
+        // Phase 16 breakdown inputs
+        "addAdjustmentFn",
+        "adminOvertimeFn",
+        "decideOvertimeFn",
+        "employmentPeriodsFn",
+        "myOvertimeFn",
+        "payrollBreakdownFn",
+        "recordOvertimeFn",
+        "setEmploymentPeriodFn",
+        "voidAdjustmentFn",
       ].sort(),
     );
     const handlers = payrollFns.split(/export const \w+Fn/).slice(1);
@@ -34,13 +45,14 @@ describe("payroll endpoints — placement & trust boundary", () => {
   });
 
   it("the client cannot submit a calculated salary / bonus / counts / status / approver", () => {
-    // none of these appear as request-validator fields
-    expect(payrollFns).not.toMatch(/calculatedSalary/);
+    // no engine-computed value is ever a request-validator field
+    expect(payrollFns).not.toMatch(/calculatedSalary|grossSalary/);
     expect(payrollFns).not.toMatch(/regularityBonus/);
-    expect(payrollFns).not.toMatch(/leaveCount|offCount/);
+    expect(payrollFns).not.toMatch(/leaveCount|offCount|unpaidLeaveDeduction|offDeduction/);
+    expect(payrollFns).not.toMatch(/payableBase|prorationNumerator|prorationDenominator/);
     expect(payrollFns).not.toMatch(/approvedBy|lockedBy|calculatedBy/);
-    // `status:` only ever appears as an optional read filter on the admin list
-    for (const m of payrollFns.matchAll(/\bstatus:\s*[^,\n]*/g)) {
+    // `status:` only ever appears as an OPTIONAL read filter
+    for (const m of payrollFns.matchAll(/\bstatus:\s*z\.[^\n]*/g)) {
       expect(m[0]).toMatch(/\.optional\(\)/);
     }
     // calculate / approve / lock inputs carry only a target user + month
@@ -50,6 +62,12 @@ describe("payroll endpoints — placement & trust boundary", () => {
       expect(body).toMatch(/month/);
       expect(body).not.toMatch(/salary|bonus|status|amount/i);
     }
+    // the ONLY client-supplied money is HR configuration: a base salary, or an
+    // explicit labelled adjustment magnitude — both bounded & non-negative.
+    const adj = payrollFns
+      .slice(payrollFns.indexOf("adjustmentInput = z.object({"))
+      .split("})")[0]!;
+    expect(adj).toMatch(/amount: z\.coerce\.number\(\)\.finite\(\)\.min\(0\)/);
   });
 
   it("payroll consumes the Phase-12 bonus engine — it does NOT recompute eligibility", () => {
@@ -60,11 +78,22 @@ describe("payroll endpoints — placement & trust boundary", () => {
     expect(svcCode).not.toMatch(/countLeaveDaysInMonth|countActiveOffInMonth/);
   });
 
-  it("calculatedSalary comes from the pure engine, base + bonus only", () => {
-    expect(svcCode).toMatch(/calculatePayroll\(\{/);
+  it("the gross comes from the pure engine; no statutory term; no invented rate", () => {
+    // the service composes the snapshot via the pure Phase-16 engine
+    expect(svcCode).toMatch(/calculateMonthlyPayroll\(\{/);
+    expect(pureCode).toMatch(/export function calculateMonthlyPayroll/);
+    // Phase-13 back-compat engine is still base + bonus only
     expect(pureCode).toMatch(/addMoney\(baseSalary, regularityBonus\)/);
-    // no speculative money terms anywhere in the pure engine
-    expect(pureCode).not.toMatch(/\b(tax|pf|esi|tds|deduction|proration|overtime)\b/i);
+    // NO statutory / tax term anywhere in the pure engine
+    expect(pureCode).not.toMatch(/\b(tax|pf|esi|tds|professional[_ -]?tax|statutory)\b/i);
+    // the service NEVER invents an undefined rate — it passes ₹0 for the
+    // unpaid-leave / Off / overtime money until a business rate exists
+    expect(svcCode).toMatch(/unpaidLeaveDeduction: 0/);
+    expect(svcCode).toMatch(/offDeduction: 0/);
+    expect(svcCode).toMatch(/overtimeAmount: 0/);
+    // regularity bonus is still consumed, not recomputed
+    expect(svcCode).toMatch(/recomputeBonus\(/);
+    expect(svcCode).not.toMatch(/computeRegularityBonus/);
   });
 
   it("no Closer incentive / commission / sales vocabulary in any payroll file", () => {
