@@ -23,6 +23,7 @@ import { Route as ShellLeaveRouteImport } from './routes/_shell.leave'
 import { Route as ShellMissionControlRouteImport } from './routes/_shell.mission-control'
 import { Route as ShellNotificationsRouteImport } from './routes/_shell.notifications'
 import { Route as ShellPeopleRouteImport } from './routes/_shell.people'
+import { Route as ShellPresenceRouteImport } from './routes/_shell.presence'
 import { Route as ShellProfileRouteImport } from './routes/_shell.profile'
 import { Route as ShellReportsRouteImport } from './routes/_shell.reports'
 import { Route as ShellSettingsRouteImport } from './routes/_shell.settings'
@@ -107,6 +108,11 @@ const ShellNotificationsRoute = ShellNotificationsRouteImport.update({
 const ShellPeopleRoute = ShellPeopleRouteImport.update({
   id: '/people',
   path: '/people',
+  getParentRoute: () => ShellRoute,
+} as any)
+const ShellPresenceRoute = ShellPresenceRouteImport.update({
+  id: '/presence',
+  path: '/presence',
   getParentRoute: () => ShellRoute,
 } as any)
 const ShellProfileRoute = ShellProfileRouteImport.update({
@@ -205,6 +211,7 @@ export interface FileRoutesByFullPath {
   '/mission-control': typeof ShellMissionControlRoute
   '/notifications': typeof ShellNotificationsRoute
   '/people': typeof ShellPeopleRoute
+  '/presence': typeof ShellPresenceRoute
   '/profile': typeof ShellProfileRoute
   '/reports': typeof ShellReportsRoute
   '/settings': typeof ShellSettingsRoute
@@ -236,6 +243,7 @@ export interface FileRoutesByTo {
   '/mission-control': typeof ShellMissionControlRoute
   '/notifications': typeof ShellNotificationsRoute
   '/people': typeof ShellPeopleRoute
+  '/presence': typeof ShellPresenceRoute
   '/profile': typeof ShellProfileRoute
   '/reports': typeof ShellReportsRoute
   '/settings': typeof ShellSettingsRoute
@@ -269,6 +277,7 @@ export interface FileRoutesById {
   '/_shell/mission-control': typeof ShellMissionControlRoute
   '/_shell/notifications': typeof ShellNotificationsRoute
   '/_shell/people': typeof ShellPeopleRoute
+  '/_shell/presence': typeof ShellPresenceRoute
   '/_shell/profile': typeof ShellProfileRoute
   '/_shell/reports': typeof ShellReportsRoute
   '/_shell/settings': typeof ShellSettingsRoute
@@ -302,6 +311,7 @@ export interface FileRouteTypes {
     | '/mission-control'
     | '/notifications'
     | '/people'
+    | '/presence'
     | '/profile'
     | '/reports'
     | '/settings'
@@ -333,6 +343,7 @@ export interface FileRouteTypes {
     | '/mission-control'
     | '/notifications'
     | '/people'
+    | '/presence'
     | '/profile'
     | '/reports'
     | '/settings'
@@ -365,6 +376,7 @@ export interface FileRouteTypes {
     | '/_shell/mission-control'
     | '/_shell/notifications'
     | '/_shell/people'
+    | '/_shell/presence'
     | '/_shell/profile'
     | '/_shell/reports'
     | '/_shell/settings'
@@ -486,6 +498,13 @@ declare module '@tanstack/react-router' {
       path: '/people'
       fullPath: '/people'
       preLoaderRoute: typeof ShellPeopleRouteImport
+      parentRoute: typeof ShellRoute
+    }
+    '/_shell/presence': {
+      id: '/_shell/presence'
+      path: '/presence'
+      fullPath: '/presence'
+      preLoaderRoute: typeof ShellPresenceRouteImport
       parentRoute: typeof ShellRoute
     }
     '/_shell/profile': {
@@ -616,6 +635,7 @@ interface ShellRouteChildren {
   ShellMissionControlRoute: typeof ShellMissionControlRoute
   ShellNotificationsRoute: typeof ShellNotificationsRoute
   ShellPeopleRoute: typeof ShellPeopleRoute
+  ShellPresenceRoute: typeof ShellPresenceRoute
   ShellProfileRoute: typeof ShellProfileRoute
   ShellReportsRoute: typeof ShellReportsRoute
   ShellSettingsRoute: typeof ShellSettingsRoute
@@ -647,6 +667,7 @@ const ShellRouteChildren: ShellRouteChildren = {
   ShellMissionControlRoute: ShellMissionControlRoute,
   ShellNotificationsRoute: ShellNotificationsRoute,
   ShellPeopleRoute: ShellPeopleRoute,
+  ShellPresenceRoute: ShellPresenceRoute,
   ShellProfileRoute: ShellProfileRoute,
   ShellReportsRoute: ShellReportsRoute,
   ShellSettingsRoute: ShellSettingsRoute,

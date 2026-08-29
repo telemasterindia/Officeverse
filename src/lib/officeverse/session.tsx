@@ -77,6 +77,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     staleTime: 30_000,
     retry: false,
     refetchOnWindowFocus: true,
+    // Phase 9A: a modest interval keeps the server session's `last_seen_at`
+    // fresh (via resolveSession's own throttled bump) so Admin presence can
+    // tell ONLINE from IDLE. It does NOT drive auth — just activity.
+    refetchInterval: 2 * 60_000,
+    refetchIntervalInBackground: false,
   });
 
   const publicUser = meQuery.data?.user ?? null;

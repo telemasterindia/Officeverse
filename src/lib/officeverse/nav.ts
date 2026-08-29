@@ -96,6 +96,7 @@ export const NAV_BY_ROLE: Record<Role, { group: string; items: NavItem[] }[]> = 
         { label: "Leads", to: "/leads", icon: ClipboardList, exact: true },
         { label: "Follow-ups", to: "/followups", icon: ListChecks },
         { label: "Assignments", to: "/assignments", icon: Target },
+        { label: "Agent Presence", to: "/presence", icon: Activity },
       ],
     },
     {

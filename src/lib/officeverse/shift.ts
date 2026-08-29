@@ -79,3 +79,87 @@ export function shiftDateIST(
   const endHour = Number(end.slice(0, 2));
   return hour < endHour ? addDays(date, -1) : date;
 }
+
+/* ------------------------------------------------------------------ *
+ *  Canonical structured shift definitions (Phase 9A)                 *
+ *                                                                    *
+ *  ONE source of truth. `shiftWindow()` (which parses the display    *
+ *  string in PROCESSES) is the underlying parser; SHIFTS is the      *
+ *  structured view every presence / attendance / reporting feature   *
+ *  should read. Officeverse canonical timings (IST):                 *
+ *    US    21:00 – 06:00  (crosses midnight)                         *
+ *    INDIA 09:30 – 18:30  (same day)                                 *
+ * ------------------------------------------------------------------ */
+
+export interface ShiftDef {
+  process: ProcessCode;
+  name: string;
+  /** IANA timezone the start/end are expressed in */
+  tz: string;
+  /** "HH:MM" 24h */
+  start: string;
+  /** "HH:MM" 24h — EXCLUSIVE end */
+  end: string;
+  crossesMidnight: boolean;
+}
+
+const IST = IST_TZ;
+
+function shiftDef(process: ProcessCode): ShiftDef {
+  const w = shiftWindow(process);
+  return {
+    process,
+    name: PROCESSES[process].shift,
+    tz: IST,
+    start: w.start,
+    end: w.end,
+    crossesMidnight: w.overnight,
+  };
+}
+
+export const SHIFTS: Record<ProcessCode, ShiftDef> = {
+  US: shiftDef("US"),
+  UK: shiftDef("UK"),
+  IN: shiftDef("IN"),
+  AU: shiftDef("AU"),
+};
+
+function hhmmToMinutes(hhmm: string): number {
+  const [h = "0", m = "0"] = hhmm.split(":");
+  return Number(h) * 60 + Number(m);
+}
+
+/** Start/end of the shift as minutes-since-midnight IST. */
+export function shiftMinutes(process: ProcessCode = "US"): {
+  start: number;
+  end: number;
+  crossesMidnight: boolean;
+} {
+  const w = shiftWindow(process);
+  return {
+    start: hhmmToMinutes(w.start),
+    end: hhmmToMinutes(w.end),
+    crossesMidnight: w.overnight,
+  };
+}
+
+/**
+ * Does an instant fall INSIDE the operational shift window (IST)?
+ * End is exclusive: US 06:00 and India 18:30 are OUTSIDE the shift.
+ *
+ *   US    21:00 → true · 23:59 → true · 02:00 → true · 05:59 → true · 06:00 → false
+ *   INDIA 09:30 → true · 18:29 → true · 18:30 → false · 09:29 → false
+ */
+export function isWithinShift(
+  instant: number | Date = Date.now(),
+  process: ProcessCode = "US",
+): boolean {
+  const { hour, minute } = istParts(instant);
+  const nowMin = hour * 60 + minute;
+  const { start, end, crossesMidnight } = shiftMinutes(process);
+  if (crossesMidnight) {
+    // [start, 24:00) ∪ [00:00, end)
+    return nowMin >= start || nowMin < end;
+  }
+  return nowMin >= start && nowMin < end;
+}
