@@ -31,6 +31,18 @@ export function assertCanManageHolidays(role: HrRole): void {
   }
 }
 
+/** Phase 13: base-salary configuration + the payroll lifecycle
+ *  (calculate / approve / lock / reopen) are the same Admin / HR gate.
+ *  Employees never reach any of these — only their own read view. */
+export const canManagePayroll = canManageLeave;
+export const canViewAllPayroll = canManageLeave;
+
+export function assertCanManagePayroll(role: HrRole): void {
+  if (!canManagePayroll(role)) {
+    throw new HttpError(403, "Only Admin / HR may manage payroll", "forbidden");
+  }
+}
+
 /** self only — a client-supplied owner id is never trusted */
 export function canRequestLeaveFor(actorUserId: number, targetUserId: number): boolean {
   return actorUserId === targetUserId;

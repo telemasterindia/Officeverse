@@ -20,6 +20,7 @@ import {
   UserPlus,
   Users,
   Users2,
+  Wallet,
 } from "lucide-react";
 import type { Role } from "./types";
 
@@ -50,6 +51,7 @@ export const NAV_BY_ROLE: Record<Role, { group: string; items: NavItem[] }[]> = 
         { label: "My Attendance", to: "/attendance", icon: CalendarCheck },
         { label: "Leave", to: "/leave", icon: Plane },
         { label: "Holidays", to: "/holidays", icon: CalendarDays },
+        { label: "My Payroll", to: "/payroll", icon: Wallet },
         { label: "Profile", to: "/profile", icon: UserCircle },
       ],
     },
@@ -72,6 +74,7 @@ export const NAV_BY_ROLE: Record<Role, { group: string; items: NavItem[] }[]> = 
         { label: "My Attendance", to: "/attendance", icon: CalendarCheck },
         { label: "Leave", to: "/leave", icon: Plane },
         { label: "Holidays", to: "/holidays", icon: CalendarDays },
+        { label: "My Payroll", to: "/payroll", icon: Wallet },
         { label: "Profile", to: "/profile", icon: UserCircle },
       ],
     },
@@ -85,6 +88,7 @@ export const NAV_BY_ROLE: Record<Role, { group: string; items: NavItem[] }[]> = 
         { label: "Attendance", to: "/attendance", icon: CalendarCheck },
         { label: "Leave", to: "/leave", icon: Plane },
         { label: "Holidays", to: "/holidays", icon: CalendarDays },
+        { label: "Payroll", to: "/payroll", icon: Wallet },
         { label: "Reports", to: "/reports", icon: FileBarChart },
       ],
     },
@@ -135,6 +139,7 @@ export const NAV_BY_ROLE: Record<Role, { group: string; items: NavItem[] }[]> = 
         { label: "Attendance", to: "/attendance", icon: CalendarCheck },
         { label: "Leave & Off", to: "/leave", icon: Plane },
         { label: "Holidays & Bonus", to: "/holidays", icon: CalendarDays },
+        { label: "Payroll", to: "/payroll", icon: Wallet },
       ],
     },
     {

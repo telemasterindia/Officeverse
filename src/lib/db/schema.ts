@@ -1041,6 +1041,126 @@ export const regularityBonus = mysqlTable(
 );
 
 /* ------------------------------------------------------------------ *
+ *  22 · salary_profiles  (effective-dated base salary — Phase 13)     *
+ *  One authoritative base-salary source for EVERY user (not just      *
+ *  agents). Effective-dated so a later raise never rewrites a past    *
+ *  month's payroll. Whether leave / Off / attendance have any        *
+ *  monetary effect is NOT decided here — that policy is deferred.     *
+ * ------------------------------------------------------------------ */
+
+export const salaryProfiles = mysqlTable(
+  "salary_profiles",
+  {
+    id: bigint("id", { mode: "number", unsigned: true }).autoincrement().primaryKey(),
+    userId: int("user_id", { unsigned: true })
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    /** monthly base salary in rupees (paise allowed). Never negative — the
+     *  service validates before write. */
+    baseSalary: decimal("base_salary", { precision: 12, scale: 2 }).notNull().default("0.00"),
+    /** first calendar day this base salary applies from ("YYYY-MM-DD") */
+    effectiveFrom: dcol("effective_from").notNull(),
+    /** last calendar day it applies (null = still in effect) */
+    effectiveTo: dcol("effective_to"),
+    active: boolean("active").notNull().default(true),
+    note: varchar("note", { length: 255 }),
+    createdByUserId: int("created_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    updatedByUserId: int("updated_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    createdAt: dt("created_at").notNull(),
+    updatedAt: dt("updated_at").notNull(),
+  },
+  (t) => ({
+    userFromUq: unique("salary_profiles_user_from_uq").on(t.userId, t.effectiveFrom),
+    userIdx: index("salary_profiles_user_idx").on(t.userId, t.effectiveFrom),
+    activeIdx: index("salary_profiles_active_idx").on(t.active),
+  }),
+);
+
+/* ------------------------------------------------------------------ *
+ *  23 · payroll_runs  (monthly salary snapshot — Phase 13)            *
+ *  DRAFT → CALCULATED → APPROVED → LOCKED. One row per (user, month). *
+ *  Every money value is SNAPSHOTTED so a future salary slip is        *
+ *  reproducible even after salary config or bonus rows change.        *
+ *  calculatedSalary = baseSalary + regularityBonus  — nothing else.   *
+ *  NO incentive / commission / tax / statutory field exists here by   *
+ *  design; those rules are not frozen.                                *
+ * ------------------------------------------------------------------ */
+
+export const PAYROLL_STATUSES = ["DRAFT", "CALCULATED", "APPROVED", "LOCKED"] as const;
+
+export const payrollRuns = mysqlTable(
+  "payroll_runs",
+  {
+    id: bigint("id", { mode: "number", unsigned: true }).autoincrement().primaryKey(),
+    userId: int("user_id", { unsigned: true })
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    /** calendar payroll month, "YYYY-MM" */
+    periodMonth: varchar("period_month", { length: 7 }).notNull(),
+    /** snapshot of the employee's process at calculation time */
+    process: mysqlEnum("process", PROCESS_CODES).notNull(),
+    status: mysqlEnum("status", PAYROLL_STATUSES).notNull().default("DRAFT"),
+    /** ---- snapshotted values ---- */
+    baseSalary: decimal("base_salary", { precision: 12, scale: 2 }).notNull().default("0.00"),
+    regularityBonus: int("regularity_bonus", { unsigned: true }).notNull().default(0),
+    calculatedSalary: decimal("calculated_salary", { precision: 12, scale: 2 })
+      .notNull()
+      .default("0.00"),
+    leaveCount: int("leave_count", { unsigned: true }).notNull().default(0),
+    offCount: int("off_count", { unsigned: true }).notNull().default(0),
+    /** provenance — which config / bonus row produced this snapshot */
+    salaryProfileId: bigint("salary_profile_id", { mode: "number", unsigned: true }).references(
+      () => salaryProfiles.id,
+      { onDelete: "set null", onUpdate: "cascade" },
+    ),
+    bonusRecordId: bigint("bonus_record_id", { mode: "number", unsigned: true }).references(
+      () => regularityBonus.id,
+      { onDelete: "set null", onUpdate: "cascade" },
+    ),
+    calculationVersion: varchar("calculation_version", { length: 16 }).notNull().default("v1"),
+    calculatedByUserId: int("calculated_by_user_id", { unsigned: true }).references(
+      () => users.id,
+      {
+        onDelete: "set null",
+        onUpdate: "cascade",
+      },
+    ),
+    calculatedAt: dt("calculated_at"),
+    approvedByUserId: int("approved_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    approvedAt: dt("approved_at"),
+    lockedByUserId: int("locked_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    lockedAt: dt("locked_at"),
+    /** explicit authorized correction trail — a LOCKED/APPROVED run is never
+     *  silently mutated; it must be reopened first, with a reason. */
+    reopenedByUserId: int("reopened_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    reopenedAt: dt("reopened_at"),
+    reopenReason: varchar("reopen_reason", { length: 255 }),
+    createdAt: dt("created_at").notNull(),
+    updatedAt: dt("updated_at").notNull(),
+  },
+  (t) => ({
+    userMonthUq: unique("payroll_runs_user_month_uq").on(t.userId, t.periodMonth),
+    monthIdx: index("payroll_runs_month_idx").on(t.periodMonth),
+    statusIdx: index("payroll_runs_status_idx").on(t.status),
+  }),
+);
+
+/* ------------------------------------------------------------------ *
  *  15 · schema_meta  (one-row marker: has production been seeded?)    *
  *  Keeps demo/seed data strictly separate from production (Phase 19). *
  * ------------------------------------------------------------------ */
@@ -1180,3 +1300,7 @@ export type Holiday = typeof holidays.$inferSelect;
 export type NewHoliday = typeof holidays.$inferInsert;
 export type RegularityBonus = typeof regularityBonus.$inferSelect;
 export type NewRegularityBonus = typeof regularityBonus.$inferInsert;
+export type SalaryProfile = typeof salaryProfiles.$inferSelect;
+export type NewSalaryProfile = typeof salaryProfiles.$inferInsert;
+export type PayrollRun = typeof payrollRuns.$inferSelect;
+export type NewPayrollRun = typeof payrollRuns.$inferInsert;

@@ -23,6 +23,7 @@ import { Route as ShellImportsRouteImport } from './routes/_shell.imports'
 import { Route as ShellLeaveRouteImport } from './routes/_shell.leave'
 import { Route as ShellMissionControlRouteImport } from './routes/_shell.mission-control'
 import { Route as ShellNotificationsRouteImport } from './routes/_shell.notifications'
+import { Route as ShellPayrollRouteImport } from './routes/_shell.payroll'
 import { Route as ShellPeopleRouteImport } from './routes/_shell.people'
 import { Route as ShellPresenceRouteImport } from './routes/_shell.presence'
 import { Route as ShellProfileRouteImport } from './routes/_shell.profile'
@@ -109,6 +110,11 @@ const ShellMissionControlRoute = ShellMissionControlRouteImport.update({
 const ShellNotificationsRoute = ShellNotificationsRouteImport.update({
   id: '/notifications',
   path: '/notifications',
+  getParentRoute: () => ShellRoute,
+} as any)
+const ShellPayrollRoute = ShellPayrollRouteImport.update({
+  id: '/payroll',
+  path: '/payroll',
   getParentRoute: () => ShellRoute,
 } as any)
 const ShellPeopleRoute = ShellPeopleRouteImport.update({
@@ -217,6 +223,7 @@ export interface FileRoutesByFullPath {
   '/leave': typeof ShellLeaveRoute
   '/mission-control': typeof ShellMissionControlRoute
   '/notifications': typeof ShellNotificationsRoute
+  '/payroll': typeof ShellPayrollRoute
   '/people': typeof ShellPeopleRoute
   '/presence': typeof ShellPresenceRoute
   '/profile': typeof ShellProfileRoute
@@ -250,6 +257,7 @@ export interface FileRoutesByTo {
   '/leave': typeof ShellLeaveRoute
   '/mission-control': typeof ShellMissionControlRoute
   '/notifications': typeof ShellNotificationsRoute
+  '/payroll': typeof ShellPayrollRoute
   '/people': typeof ShellPeopleRoute
   '/presence': typeof ShellPresenceRoute
   '/profile': typeof ShellProfileRoute
@@ -285,6 +293,7 @@ export interface FileRoutesById {
   '/_shell/leave': typeof ShellLeaveRoute
   '/_shell/mission-control': typeof ShellMissionControlRoute
   '/_shell/notifications': typeof ShellNotificationsRoute
+  '/_shell/payroll': typeof ShellPayrollRoute
   '/_shell/people': typeof ShellPeopleRoute
   '/_shell/presence': typeof ShellPresenceRoute
   '/_shell/profile': typeof ShellProfileRoute
@@ -320,6 +329,7 @@ export interface FileRouteTypes {
     | '/leave'
     | '/mission-control'
     | '/notifications'
+    | '/payroll'
     | '/people'
     | '/presence'
     | '/profile'
@@ -353,6 +363,7 @@ export interface FileRouteTypes {
     | '/leave'
     | '/mission-control'
     | '/notifications'
+    | '/payroll'
     | '/people'
     | '/presence'
     | '/profile'
@@ -387,6 +398,7 @@ export interface FileRouteTypes {
     | '/_shell/leave'
     | '/_shell/mission-control'
     | '/_shell/notifications'
+    | '/_shell/payroll'
     | '/_shell/people'
     | '/_shell/presence'
     | '/_shell/profile'
@@ -510,6 +522,13 @@ declare module '@tanstack/react-router' {
       path: '/notifications'
       fullPath: '/notifications'
       preLoaderRoute: typeof ShellNotificationsRouteImport
+      parentRoute: typeof ShellRoute
+    }
+    '/_shell/payroll': {
+      id: '/_shell/payroll'
+      path: '/payroll'
+      fullPath: '/payroll'
+      preLoaderRoute: typeof ShellPayrollRouteImport
       parentRoute: typeof ShellRoute
     }
     '/_shell/people': {
@@ -654,6 +673,7 @@ interface ShellRouteChildren {
   ShellLeaveRoute: typeof ShellLeaveRoute
   ShellMissionControlRoute: typeof ShellMissionControlRoute
   ShellNotificationsRoute: typeof ShellNotificationsRoute
+  ShellPayrollRoute: typeof ShellPayrollRoute
   ShellPeopleRoute: typeof ShellPeopleRoute
   ShellPresenceRoute: typeof ShellPresenceRoute
   ShellProfileRoute: typeof ShellProfileRoute
@@ -687,6 +707,7 @@ const ShellRouteChildren: ShellRouteChildren = {
   ShellLeaveRoute: ShellLeaveRoute,
   ShellMissionControlRoute: ShellMissionControlRoute,
   ShellNotificationsRoute: ShellNotificationsRoute,
+  ShellPayrollRoute: ShellPayrollRoute,
   ShellPeopleRoute: ShellPeopleRoute,
   ShellPresenceRoute: ShellPresenceRoute,
   ShellProfileRoute: ShellProfileRoute,
