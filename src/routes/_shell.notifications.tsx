@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { Bell, Mail } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -6,14 +6,16 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EmptyState, PageHeader } from "@/components/officeverse/primitives";
-import {
-  markAllNotificationsRead,
-  markNotificationRead,
-  queueEmail,
-} from "@/lib/officeverse/alerts";
+import { queueEmail } from "@/lib/officeverse/alerts";
 import { renderShiftEmail } from "@/lib/officeverse/email-templates";
 import { followUpsForNextShift, loadFollowUps } from "@/lib/officeverse/followups";
-import { useNotifications, useOutbox } from "@/lib/officeverse/use-crm";
+import { notificationHref } from "@/lib/officeverse/notification-link";
+import {
+  useMarkAllNotificationsRead,
+  useMarkNotificationRead,
+  useNotificationList,
+} from "@/lib/officeverse/use-notifications";
+import { useOutbox } from "@/lib/officeverse/use-crm";
 import { useSession } from "@/lib/officeverse/session";
 import { cn } from "@/lib/utils";
 
@@ -30,28 +32,51 @@ export const Route = createFileRoute("/_shell/notifications")({
 });
 
 const TABS = ["All", "Leads", "Follow-ups", "System", "Emails"] as const;
+type TabName = (typeof TABS)[number];
+const PAGE_SIZE = 20;
+
+/** Client-side category filter over the already-bounded server page. */
+function inCategory(type: string, tab: TabName): boolean {
+  if (tab === "All") return true;
+  if (tab === "Leads") return type.startsWith("lead");
+  if (tab === "Follow-ups") return type.startsWith("followup");
+  if (tab === "System") return !type.startsWith("lead") && !type.startsWith("followup");
+  return false;
+}
 
 function NotificationsPage() {
   const { user } = useSession();
   const { tab } = Route.useSearch();
-  const initialTab = TABS.includes(tab as (typeof TABS)[number]) ? tab! : "All";
-  const notifications = useNotifications();
+  const initialTab: TabName = TABS.includes(tab as TabName) ? (tab as TabName) : "All";
+
+  const [page, setPage] = useState(1);
+  const list = useNotificationList({ page, pageSize: PAGE_SIZE });
+  const markRead = useMarkNotificationRead();
+  const markAll = useMarkAllNotificationsRead();
   const outbox = useOutbox();
   const [openMail, setOpenMail] = useState<string | null>(null);
+
+  const result = list.data;
+  const notifications = result?.notifications ?? [];
+  const totalPages = result?.totalPages ?? 1;
+  const unread = result?.unread ?? 0;
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Notifications"
-        description="Follow-up reminders (15 / 3 / 1 minute), lead updates, and every email the workflow queued."
+        description="Lead updates, follow-up activity, and every email the workflow queued."
         actions={
           <Button
             variant="outline"
             className="rounded-lg"
-            onClick={() => {
-              markAllNotificationsRead();
-              toast("All notifications marked as read");
-            }}
+            disabled={unread === 0 || markAll.isPending}
+            onClick={() =>
+              markAll.mutate(undefined, {
+                onSuccess: () => toast("All notifications marked as read"),
+                onError: () => toast.error("Couldn't mark all as read — please try again"),
+              })
+            }
           >
             Mark all as read
           </Button>
@@ -68,64 +93,124 @@ function NotificationsPage() {
         </TabsList>
 
         {TABS.filter((t) => t !== "Emails").map((t) => {
-          const items = notifications.filter((n) => t === "All" || n.category === t);
+          const items = notifications.filter((n) => inCategory(n.type, t));
           return (
             <TabsContent key={t} value={t} className="mt-6 space-y-3">
-              {items.length === 0 ? (
+              {list.isLoading ? (
+                <Card className="rounded-xl border-border bg-card p-6 text-center text-sm text-muted-foreground shadow-sm">
+                  Loading notifications…
+                </Card>
+              ) : list.isError ? (
+                <Card className="rounded-xl border-destructive/40 bg-destructive/5 p-6 text-center text-sm shadow-sm">
+                  <p className="font-semibold text-destructive">Couldn't load notifications.</p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="mt-3 rounded-lg"
+                    onClick={() => list.refetch()}
+                  >
+                    Retry
+                  </Button>
+                </Card>
+              ) : items.length === 0 ? (
                 <EmptyState
                   emoji="🔕"
                   title="All quiet."
                   message="Nothing in this category right now."
                 />
               ) : (
-                items.map((n) => (
-                  <Card
-                    key={n.id}
-                    className={cn(
-                      "grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-4 rounded-xl border-border bg-card p-4 shadow-sm",
-                      n.unread && "border-l-2 border-l-primary",
-                    )}
-                  >
-                    <span
-                      className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-primary/12 text-primary"
-                      aria-hidden
+                items.map((n) => {
+                  const href = notificationHref(n);
+                  return (
+                    <Card
+                      key={n.id}
+                      className={cn(
+                        "grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-4 rounded-xl border-border bg-card p-4 shadow-sm",
+                        n.unread && "border-l-2 border-l-primary",
+                      )}
                     >
-                      <Bell className="h-5 w-5" />
-                    </span>
-                    <div className="min-w-0">
-                      <p className="truncate font-semibold">{n.title}</p>
-                      <p className="mt-0.5 text-sm text-muted-foreground">{n.body}</p>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        {n.category} · {n.time}
-                      </p>
-                    </div>
-                    {n.unread ? (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="shrink-0 rounded-lg"
-                        onClick={() => markNotificationRead(n.id)}
+                      <span
+                        className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-primary/12 text-primary"
+                        aria-hidden
                       >
-                        Mark read
-                      </Button>
-                    ) : (
-                      <span className="shrink-0 text-xs text-muted-foreground">Read</span>
-                    )}
-                  </Card>
-                ))
+                        <Bell className="h-5 w-5" />
+                      </span>
+                      <div className="min-w-0">
+                        <p className="truncate font-semibold">{n.title}</p>
+                        <p className="mt-0.5 text-sm text-muted-foreground">{n.message}</p>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          {n.type} · {new Date(n.created_at).toLocaleString()}
+                        </p>
+                        {href ? (
+                          <Link
+                            {...href}
+                            className="mt-1 inline-block text-xs font-semibold text-primary hover:underline"
+                            onClick={() => {
+                              if (n.unread) markRead.mutate(n.id);
+                            }}
+                          >
+                            Open {n.related_entity_code}
+                          </Link>
+                        ) : null}
+                      </div>
+                      {n.unread ? (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="shrink-0 rounded-lg"
+                          disabled={markRead.isPending}
+                          onClick={() =>
+                            markRead.mutate(n.id, {
+                              onError: () =>
+                                toast.error("Couldn't mark as read — please try again"),
+                            })
+                          }
+                        >
+                          Mark read
+                        </Button>
+                      ) : (
+                        <span className="shrink-0 text-xs text-muted-foreground">Read</span>
+                      )}
+                    </Card>
+                  );
+                })
               )}
+
+              {!list.isLoading && !list.isError && totalPages > 1 ? (
+                <div className="flex items-center justify-between pt-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="rounded-lg"
+                    disabled={page <= 1}
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  >
+                    Previous
+                  </Button>
+                  <span className="text-xs text-muted-foreground">
+                    Page {page} of {totalPages}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="rounded-lg"
+                    disabled={page >= totalPages}
+                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  >
+                    Next
+                  </Button>
+                </div>
+              ) : null}
             </TabsContent>
           );
         })}
 
         <TabsContent value="Emails" className="mt-6 space-y-3">
           <Card className="rounded-xl border-warning/40 bg-warning/10 p-4 text-xs shadow-sm">
-            <span className="font-semibold text-warning">Not delivered.</span> This build has no
-            mail provider. Every email the workflow would send — the single Closer follow-up
-            reminder and the 4-hours-before-shift summary — is rendered in full and{" "}
-            <strong>queued</strong> here, de-duplicated (one follow-up → one email; one shift → one
-            email). Forward this outbox to a transactional email service (Resend / SES / Postmark)
-            from a backend job to actually send.
+            <span className="font-semibold text-warning">Legacy preview.</span> This build has no
+            mail provider. The email outbox below is a client-side render of what the workflow would
+            send; the DB-backed email queue (Phase 5) is the real pipeline and is drained by a
+            future worker.
           </Card>
           {user && (user.role === "agent" || user.role === "closer") ? (
             <Button

@@ -3,7 +3,7 @@ import { AlarmClock, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { addNotification, claimOnce, queueEmail } from "@/lib/officeverse/alerts";
+import { claimOnce, queueEmail } from "@/lib/officeverse/alerts";
 import { renderCloserEmail, renderShiftEmail } from "@/lib/officeverse/email-templates";
 import {
   closerEmailKey,
@@ -30,6 +30,12 @@ type ActiveReminder = { fu: FollowUpRecord; threshold: number } | null;
 /**
  * ┌─────────────────────────────────────────────────────────────────────────┐
  * │ DEVELOPMENT / DEMO REMINDER ENGINE — NOT PRODUCTION-GRADE.               │
+ * │                                                                         │
+ * │ Phase 6: this engine NO LONGER writes to any notification feed. The      │
+ * │ DB-backed notification system (Phase 5 service + Phase 6 UI) is the      │
+ * │ single source of truth, and time-based reminder generation belongs to   │
+ * │ the future server scheduler. What remains here is an ephemeral on-screen │
+ * │ toast + floating card and the isolated localStorage email-outbox demo.  │
  * │                                                                         │
  * │ This build has NO backend scheduler. Reminders therefore run ONLY while │
  * │ a CRM tab is open, driven by a 15s setInterval. If every tab is closed  │
@@ -86,11 +92,6 @@ export function FollowUpReminders() {
           const title =
             m <= 1 ? "Follow-up now" : `Follow-up in ${mins} minute${mins === 1 ? "" : "s"}`;
           const c = resolveCustomer(fu);
-          addNotification({
-            category: "Follow-ups",
-            title,
-            body: `${c.name} · ${fu.lead_id} — scheduled ${displayTime(fu.scheduled_at)}`,
-          });
           toast(`⏰ ${title}`, {
             description: `${c.name} · ${fu.follow_up_id} — ${displayTime(fu.scheduled_at)}`,
             duration: m <= 1 ? 12_000 : 8_000,
@@ -110,13 +111,7 @@ export function FollowUpReminders() {
         // mark. Triggered only from the closer's own session; never the agent's.
         if (fu.owner_role === "closer" && user.role === "closer" && m <= 15 && m > -2) {
           if (claimOnce(closerEmailKey(fu))) {
-            const mail = renderCloserEmail(fu);
-            queueEmail(mail);
-            addNotification({
-              category: "Follow-ups",
-              title: "Closer follow-up email queued",
-              body: `Ready to send → ${mail.to} (no mail server connected)`,
-            });
+            queueEmail(renderCloserEmail(fu));
           }
         }
       }
@@ -127,13 +122,7 @@ export function FollowUpReminders() {
         const sendAt = new Date(startISO).getTime() - SHIFT_EMAIL_LEAD_MINUTES * 60_000;
         if (now >= sendAt && now <= sendAt + 12 * 60_000) {
           if (claimOnce(shiftEmailKey(user.id, startISO))) {
-            const mail = renderShiftEmail(user, followUpsForNextShift(all, user));
-            queueEmail(mail);
-            addNotification({
-              category: "System",
-              title: "Upcoming-shift summary email queued",
-              body: `Ready to send → ${mail.to} (no mail server connected)`,
-            });
+            queueEmail(renderShiftEmail(user, followUpsForNextShift(all, user)));
           }
         }
       }

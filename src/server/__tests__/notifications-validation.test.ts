@@ -88,15 +88,19 @@ describe("enqueueEmailSchema (internal enqueue shape)", () => {
 });
 
 describe("email jobs have NO client-facing server function (internal creation only)", () => {
-  const apiDir = join(__dirname, "..", "api");
+  const serverApiDir = join(__dirname, "..", "api");
+  // Phase 6: client-callable notification fns live outside src/server/** (that
+  // dir is import-protected from the client bundle).
+  const notifFns = join(__dirname, "..", "..", "lib", "officeverse", "notification-fns.ts");
 
-  it("src/server/api contains no email* module", () => {
-    const files = readdirSync(apiDir);
+  it("src/server/api contains no email* module and no client-callable notifications module", () => {
+    const files = readdirSync(serverApiDir);
     expect(files.some((f) => /^email/i.test(f))).toBe(false);
+    expect(files).not.toContain("notifications.ts");
   });
 
   it("the notifications API exposes only self-scoped read/mark functions — no enqueue", () => {
-    const src = readFileSync(join(apiDir, "notifications.ts"), "utf8");
+    const src = readFileSync(notifFns, "utf8");
     const exportedFns = [...src.matchAll(/export const (\w+Fn)\b/g)].map((m) => m[1]).sort();
     expect(exportedFns).toEqual([
       "listNotificationsFn",

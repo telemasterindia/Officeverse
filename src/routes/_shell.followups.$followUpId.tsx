@@ -16,16 +16,13 @@ import {
 } from "@/components/ui/select";
 import { LeadIdChip, PageHeader, SectionCard } from "@/components/officeverse/primitives";
 import { FollowUpStatusBadge } from "@/components/officeverse/follow-up-detail";
-import { addNotification } from "@/lib/officeverse/alerts";
 import { CLOSERS } from "@/lib/officeverse/data";
 import {
   buildScheduledAt,
   cancelFollowUp,
   completeFollowUp,
   convertFollowUpToLead,
-  displayDate,
   displayDateTime,
-  displayTime,
   rescheduleFollowUp,
   scheduledParts,
   updateFollowUpCustomer,
@@ -131,11 +128,6 @@ function FollowUpRecordPage() {
     if (!rsDate || !rsTime) return;
     const at = buildScheduledAt(rsDate, rsTime);
     rescheduleFollowUp(fu.follow_up_id, at, rsNote);
-    addNotification({
-      category: "Follow-ups",
-      title: "Follow-up rescheduled",
-      body: `${fu.customer_name} — now ${displayDate(at)} ${displayTime(at)}`,
-    });
     toast("Follow-up rescheduled — reminders re-armed", {
       description: "The previous callback is kept in the history.",
     });
@@ -144,22 +136,12 @@ function FollowUpRecordPage() {
 
   const doComplete = () => {
     completeFollowUp(fu.follow_up_id);
-    addNotification({
-      category: "Follow-ups",
-      title: "Follow-up completed",
-      body: `${fu.customer_name} · ${fu.follow_up_id}`,
-    });
     toast("✅ Follow-up completed");
     navigate({ to: "/followups" });
   };
 
   const doCancel = () => {
     cancelFollowUp(fu.follow_up_id);
-    addNotification({
-      category: "Follow-ups",
-      title: "Follow-up cancelled",
-      body: `${fu.customer_name} · ${fu.follow_up_id}`,
-    });
     toast("Follow-up cancelled");
     navigate({ to: "/followups" });
   };
@@ -176,13 +158,6 @@ function FollowUpRecordPage() {
     });
     if (!res) return;
     const dest = res.lead.assigned_closer;
-    addNotification({
-      category: "Leads",
-      title: "Follow-up converted to Lead",
-      body: isCloserOwned
-        ? `${res.lead.customer_name} · ${res.lead.lead_id} — stays with ${dest}`
-        : `${res.lead.customer_name} · ${res.lead.lead_id} — assigned to ${dest}`,
-    });
     toast("✅ Converted", { description: `${res.lead.lead_id} → ${dest}` });
     navigate({ to: "/leads/$leadId", params: { leadId: res.lead.lead_id } });
   };

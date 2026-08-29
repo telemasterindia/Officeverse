@@ -30,7 +30,6 @@ import {
 } from "@/components/ui/select";
 import { DEFAULT_AVATAR } from "@/lib/officeverse/avatar";
 import { PROCESSES, ROLE_LABEL } from "@/lib/officeverse/data";
-import { useUnreadCount } from "@/lib/officeverse/use-crm";
 import { useSession } from "@/lib/officeverse/session";
 import type { ProcessCode } from "@/lib/officeverse/types";
 import { roomForPath } from "@/lib/officeverse/visual";
@@ -41,6 +40,7 @@ import { ShiftBadge } from "./shift-badge";
 import { SearchCommand } from "./search-command";
 import { QuotePopup } from "./quote-popup";
 import { FollowUpReminders } from "./follow-up-reminders";
+import { NotificationBell } from "./notification-bell";
 import { UsTimezoneWatches } from "./us-timezone-watches";
 
 function Brand() {
@@ -74,7 +74,6 @@ function TopBar({
 }) {
   const { user, avatar, theme, toggleTheme, signOut, setProcess } = useSession();
   const navigate = useNavigate();
-  const unread = useUnreadCount();
   const photo = useEmployeePhoto(user?.name ?? "");
   if (!user) return null;
   const cfg = avatar ?? DEFAULT_AVATAR;
@@ -147,16 +146,7 @@ function TopBar({
         <Button variant="ghost" size="icon" onClick={toggleTheme} aria-label="Switch theme">
           {theme === "dark" ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
         </Button>
-        <Button variant="ghost" size="icon" asChild aria-label="Notifications">
-          <Link to="/notifications" className="relative">
-            <Bell className="h-5 w-5" />
-            {unread > 0 ? (
-              <span className="absolute right-1.5 top-1.5 grid h-4 min-w-4 place-items-center rounded-full bg-destructive px-1 text-[10px] font-bold text-destructive-foreground">
-                {unread}
-              </span>
-            ) : null}
-          </Link>
-        </Button>
+        <NotificationBell />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button className="flex items-center gap-2 rounded-xl px-1.5 py-1 transition-colors hover:bg-secondary/60">

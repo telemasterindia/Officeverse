@@ -13,7 +13,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { addNotification } from "@/lib/officeverse/alerts";
 import {
   buildScheduledAt,
   createFollowUp,
@@ -95,11 +94,6 @@ export function FollowUpScheduler({
       comment,
       owner: { id: owner.id, name: owner.name, role: owner.role },
       created_by: user.name,
-    });
-    addNotification({
-      category: "Follow-ups",
-      title: "Follow-up scheduled",
-      body: `${rec.customer_name} · ${rec.lead_id} — for ${owner.name}`,
     });
     toast("✅ Follow-up scheduled", { description: `${rec.customer_name} · ${rec.lead_id}` });
     onCreated?.(rec);

@@ -16,7 +16,6 @@ import {
 } from "@/components/ui/select";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { LeadIdChip, PageHeader, SectionCard } from "@/components/officeverse/primitives";
-import { addNotification } from "@/lib/officeverse/alerts";
 import { CLOSERS, DUPLICATE_PHONES } from "@/lib/officeverse/data";
 import {
   buildScheduledAt,
@@ -170,11 +169,6 @@ function NewLeadPage() {
       assigned_closer: closer,
       process: user.process,
     });
-    addNotification({
-      category: "Leads",
-      title: "Lead created",
-      body: `${lead.customer_name} · ${lead.lead_id} — transferred to ${closer}`,
-    });
     setCreatedLead(lead);
   };
 
@@ -190,11 +184,6 @@ function NewLeadPage() {
         role: user.role === "closer" ? "closer" : "agent",
       },
       created_by: user.name,
-    });
-    addNotification({
-      category: "Follow-ups",
-      title: "Follow-up scheduled",
-      body: `${rec.customer_name} · ${displayDateTime(rec.scheduled_at)}`,
     });
     toast("✅ Follow-up scheduled", {
       description: `${rec.customer_name} · ${displayDate(rec.scheduled_at)}`,
