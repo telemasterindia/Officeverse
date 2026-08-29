@@ -49,6 +49,17 @@ import {
  *  Enums (shared literal sets — mirror src/lib/officeverse/types.ts) *
  * ------------------------------------------------------------------ */
 
+/**
+ * `datetime` and `date` columns are handled as STRINGS end to end:
+ *   - stored/read as IST wall-clock ("YYYY-MM-DD HH:MM:SS" / "YYYY-MM-DD")
+ *   - mysql2 pool uses `dateStrings: true` (see db/index.ts)
+ *   - the server time module (src/server/time.ts) produces exactly these strings
+ * This keeps one timezone convention across every column and matches the
+ * existing client (buildScheduledAt / scheduledParts).
+ */
+const dt = (name: string) => datetime(name, { mode: "string" });
+const dcol = (name: string) => date(name, { mode: "string" });
+
 export const ROLES = ["admin", "agent", "closer", "hr"] as const;
 export const PROCESS_CODES = ["US", "UK", "IN", "AU"] as const;
 export const USER_STATUSES = ["active", "inactive", "suspended", "on_leave"] as const;
@@ -116,9 +127,9 @@ export const users = mysqlTable(
     /** current profile photo → staff_photos.id (fallback = generated avatar) */
     photoAssetId: int("photo_asset_id", { unsigned: true }),
     mustChangePassword: boolean("must_change_password").notNull().default(false),
-    lastLoginAt: datetime("last_login_at"),
-    createdAt: datetime("created_at").notNull(),
-    updatedAt: datetime("updated_at").notNull(),
+    lastLoginAt: dt("last_login_at"),
+    createdAt: dt("created_at").notNull(),
+    updatedAt: dt("updated_at").notNull(),
   },
   (t) => ({
     emailUq: unique("users_email_uq").on(t.email),
@@ -140,12 +151,12 @@ export const agents = mysqlTable(
       .references(() => users.id, { onDelete: "cascade", onUpdate: "cascade" }),
     /** business "Agent ID", e.g. "AG-00001" */
     agentCode: varchar("agent_code", { length: 24 }).notNull(),
-    dob: date("dob"),
+    dob: dcol("dob"),
     monthlySalary: decimal("monthly_salary", { precision: 12, scale: 2 }).notNull().default("0.00"),
     /** Date of Registration = operational SHIFT DATE (Phase 7) */
-    registeredOn: date("registered_on").notNull(),
-    createdAt: datetime("created_at").notNull(),
-    updatedAt: datetime("updated_at").notNull(),
+    registeredOn: dcol("registered_on").notNull(),
+    createdAt: dt("created_at").notNull(),
+    updatedAt: dt("updated_at").notNull(),
   },
   (t) => ({
     userUq: unique("agents_user_uq").on(t.userId),
@@ -166,10 +177,10 @@ export const closers = mysqlTable(
       .references(() => users.id, { onDelete: "cascade", onUpdate: "cascade" }),
     /** business "Closer ID", e.g. "CL-00001" */
     closerCode: varchar("closer_code", { length: 24 }).notNull(),
-    dob: date("dob"),
-    registeredOn: date("registered_on").notNull(),
-    createdAt: datetime("created_at").notNull(),
-    updatedAt: datetime("updated_at").notNull(),
+    dob: dcol("dob"),
+    registeredOn: dcol("registered_on").notNull(),
+    createdAt: dt("created_at").notNull(),
+    updatedAt: dt("updated_at").notNull(),
   },
   (t) => ({
     userUq: unique("closers_user_uq").on(t.userId),
@@ -192,9 +203,9 @@ export const clients = mysqlTable(
     phone: varchar("phone", { length: 40 }),
     address: varchar("address", { length: 500 }),
     status: mysqlEnum("status", CLIENT_STATUSES).notNull().default("prospect"),
-    registeredOn: date("registered_on").notNull(),
-    createdAt: datetime("created_at").notNull(),
-    updatedAt: datetime("updated_at").notNull(),
+    registeredOn: dcol("registered_on").notNull(),
+    createdAt: dt("created_at").notNull(),
+    updatedAt: dt("updated_at").notNull(),
   },
   (t) => ({
     codeUq: unique("clients_code_uq").on(t.clientCode),
@@ -231,9 +242,9 @@ export const imports = mysqlTable(
     errorRows: int("error_rows", { unsigned: true }).notNull().default(0),
     successCount: int("success_count", { unsigned: true }).notNull().default(0),
     errorCount: int("error_count", { unsigned: true }).notNull().default(0),
-    committedAt: datetime("committed_at"),
-    createdAt: datetime("created_at").notNull(),
-    updatedAt: datetime("updated_at").notNull(),
+    committedAt: dt("committed_at"),
+    createdAt: dt("created_at").notNull(),
+    updatedAt: dt("updated_at").notNull(),
   },
   (t) => ({
     byUserIdx: index("imports_by_user_idx").on(t.uploadedByUserId),
@@ -275,9 +286,9 @@ export const followUps = mysqlTable(
     currentDebts: mysqlEnum("current_debts", CURRENT_DEBTS),
 
     /** operational shift date the customer was captured (Phase 7) */
-    captureDate: date("capture_date").notNull(),
+    captureDate: dcol("capture_date").notNull(),
     /** canonical scheduled instant — IST wall-clock */
-    scheduledAt: datetime("scheduled_at").notNull(),
+    scheduledAt: dt("scheduled_at").notNull(),
     scheduledTz: varchar("scheduled_tz", { length: 10 }).notNull().default("+05:30"),
 
     comment: text("comment"),
@@ -289,9 +300,9 @@ export const followUps = mysqlTable(
       onUpdate: "cascade",
     }),
     convertedLeadCode: varchar("converted_lead_code", { length: 32 }),
-    convertedAt: datetime("converted_at"),
-    completedAt: datetime("completed_at"),
-    cancelledAt: datetime("cancelled_at"),
+    convertedAt: dt("converted_at"),
+    completedAt: dt("completed_at"),
+    cancelledAt: dt("cancelled_at"),
 
     createdByUserId: int("created_by_user_id", { unsigned: true })
       .notNull()
@@ -301,8 +312,8 @@ export const followUps = mysqlTable(
       onDelete: "set null",
       onUpdate: "cascade",
     }),
-    createdAt: datetime("created_at").notNull(),
-    updatedAt: datetime("updated_at").notNull(),
+    createdAt: dt("created_at").notNull(),
+    updatedAt: dt("updated_at").notNull(),
   },
   (t) => ({
     codeUq: unique("follow_ups_code_uq").on(t.followUpCode),
@@ -325,7 +336,7 @@ export const leads = mysqlTable(
     /** business "Lead ID", e.g. "TMI_00012007" — globally unique */
     leadCode: varchar("lead_code", { length: 32 }).notNull(),
     /** operational / shift date (Phase 7 canonical) */
-    shiftDate: date("shift_date").notNull(),
+    shiftDate: dcol("shift_date").notNull(),
 
     customerName: varchar("customer_name", { length: 200 }).notNull(),
     phone: varchar("phone", { length: 40 }).notNull(),
@@ -364,8 +375,8 @@ export const leads = mysqlTable(
       onUpdate: "cascade",
     }),
 
-    createdAt: datetime("created_at").notNull(),
-    updatedAt: datetime("updated_at").notNull(),
+    createdAt: dt("created_at").notNull(),
+    updatedAt: dt("updated_at").notNull(),
   },
   (t) => ({
     codeUq: unique("leads_code_uq").on(t.leadCode),
@@ -392,10 +403,10 @@ export const followUpAttempts = mysqlTable(
     /** 1-based ordinal of this attempt within the follow-up */
     attemptNo: int("attempt_no", { unsigned: true }).notNull(),
     /** the schedule this attempt covered — IST wall-clock */
-    scheduledAt: datetime("scheduled_at").notNull(),
+    scheduledAt: dt("scheduled_at").notNull(),
     outcome: mysqlEnum("outcome", ATTEMPT_OUTCOMES).notNull(),
     note: text("note"),
-    recordedAt: datetime("recorded_at").notNull(),
+    recordedAt: dt("recorded_at").notNull(),
     recordedByUserId: int("recorded_by_user_id", { unsigned: true }).references(() => users.id, {
       onDelete: "set null",
       onUpdate: "cascade",
@@ -426,10 +437,10 @@ export const notifications = mysqlTable(
     relatedEntityType: varchar("related_entity_type", { length: 40 }),
     relatedEntityId: int("related_entity_id", { unsigned: true }),
     relatedEntityCode: varchar("related_entity_code", { length: 32 }),
-    readAt: datetime("read_at"),
+    readAt: dt("read_at"),
     /** DB-level idempotency (Phase 4/5) — e.g. followup:<id>:15:<scheduled_at> */
     dedupeKey: varchar("dedupe_key", { length: 191 }),
-    createdAt: datetime("created_at").notNull(),
+    createdAt: dt("created_at").notNull(),
   },
   (t) => ({
     dedupeUq: unique("notifications_dedupe_uq").on(t.dedupeKey),
@@ -463,18 +474,18 @@ export const emailJobs = mysqlTable(
     status: mysqlEnum("status", EMAIL_STATUSES).notNull().default("queued"),
     retryCount: int("retry_count", { unsigned: true }).notNull().default(0),
     maxRetries: int("max_retries", { unsigned: true }).notNull().default(5),
-    nextAttemptAt: datetime("next_attempt_at").notNull(),
+    nextAttemptAt: dt("next_attempt_at").notNull(),
     /** for the pre-shift summary — do not send before this instant */
-    scheduledFor: datetime("scheduled_for"),
+    scheduledFor: dt("scheduled_for"),
     provider: varchar("provider", { length: 40 }),
     providerMessageId: varchar("provider_message_id", { length: 255 }),
     errorMessage: varchar("error_message", { length: 1000 }),
     /** worker claim — prevents a concurrent drain from double-sending */
-    lockedAt: datetime("locked_at"),
+    lockedAt: dt("locked_at"),
     lockedBy: varchar("locked_by", { length: 80 }),
-    sentAt: datetime("sent_at"),
-    createdAt: datetime("created_at").notNull(),
-    updatedAt: datetime("updated_at").notNull(),
+    sentAt: dt("sent_at"),
+    createdAt: dt("created_at").notNull(),
+    updatedAt: dt("updated_at").notNull(),
   },
   (t) => ({
     dedupeUq: unique("email_jobs_dedupe_uq").on(t.dedupeKey),
@@ -505,7 +516,7 @@ export const auditLogs = mysqlTable(
     metadata: json("metadata"),
     ip: varchar("ip", { length: 45 }),
     userAgent: varchar("user_agent", { length: 255 }),
-    createdAt: datetime("created_at").notNull(),
+    createdAt: dt("created_at").notNull(),
   },
   (t) => ({
     actorIdx: index("audit_actor_idx").on(t.actorUserId),
@@ -559,7 +570,7 @@ export const importErrors = mysqlTable(
     /** machine code, e.g. agent_not_found | invalid_date | duplicate_lead_id */
     code: varchar("code", { length: 60 }).notNull(),
     message: varchar("message", { length: 500 }).notNull(),
-    createdAt: datetime("created_at").notNull(),
+    createdAt: dt("created_at").notNull(),
   },
   (t) => ({
     importIdx: index("import_errors_import_idx").on(t.importId),
@@ -591,7 +602,7 @@ export const staffPhotos = mysqlTable(
       onDelete: "set null",
       onUpdate: "cascade",
     }),
-    createdAt: datetime("created_at").notNull(),
+    createdAt: dt("created_at").notNull(),
   },
   (t) => ({
     userIdx: index("staff_photos_user_idx").on(t.userId),
@@ -610,12 +621,12 @@ export const sessions = mysqlTable(
     userId: int("user_id", { unsigned: true })
       .notNull()
       .references(() => users.id, { onDelete: "cascade", onUpdate: "cascade" }),
-    createdAt: datetime("created_at").notNull(),
-    lastSeenAt: datetime("last_seen_at").notNull(),
-    expiresAt: datetime("expires_at").notNull(),
+    createdAt: dt("created_at").notNull(),
+    lastSeenAt: dt("last_seen_at").notNull(),
+    expiresAt: dt("expires_at").notNull(),
     ip: varchar("ip", { length: 45 }),
     userAgent: varchar("user_agent", { length: 255 }),
-    revokedAt: datetime("revoked_at"),
+    revokedAt: dt("revoked_at"),
   },
   (t) => ({
     userIdx: index("sessions_user_idx").on(t.userId),
@@ -632,7 +643,7 @@ export const schemaMeta = mysqlTable("schema_meta", {
   id: int("id", { unsigned: true }).primaryKey().default(1),
   /** "empty" until an admin explicitly imports or an admin user is created */
   dataMode: mysqlEnum("data_mode", ["empty", "production", "demo"]).notNull().default("empty"),
-  seededAt: datetime("seeded_at"),
+  seededAt: dt("seeded_at"),
   appVersion: varchar("app_version", { length: 40 }),
   note: varchar("note", { length: 255 }),
 });
