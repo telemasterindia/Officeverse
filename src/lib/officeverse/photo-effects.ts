@@ -173,16 +173,16 @@ export const PHOTO_EFFECTS: Record<PhotoEffectId, PhotoEffectConfig> = {
   FESTIVAL: {
     id: "FESTIVAL",
     label: "Festival",
-    ringClass: "ring-2 ring-fuchsia-500/60",
+    ringClass: "ring-2 ring-accent/60",
     animateClass: "ov-fx-glow-soft",
-    glow: "color-mix(in oklab, oklch(0.7 0.2 330) 45%, transparent)",
+    glow: "color-mix(in oklab, var(--accent) 45%, transparent)",
     particle: "colour-splash",
     durationMs: clampMs(2800),
     reducedMotion: {
-      ringClass: "ring-2 ring-fuchsia-500/50",
-      glow: "color-mix(in oklab, oklch(0.7 0.2 330) 22%, transparent)",
+      ringClass: "ring-2 ring-accent/50",
+      glow: "color-mix(in oklab, var(--accent) 22%, transparent)",
       particle: "none",
-      note: "colour accent frame, no splash",
+      note: "blue accent frame, no splash",
     },
   },
   VICTORY: {

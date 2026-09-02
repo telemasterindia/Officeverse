@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { AlertTriangle, CheckCircle2, Loader2 } from "lucide-react";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { AlertTriangle, CheckCircle2, Loader2, XCircle } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,20 +16,29 @@ import {
 } from "@/components/ui/select";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { LeadIdChip, PageHeader, SectionCard } from "@/components/officeverse/primitives";
-import { CLOSERS, DUPLICATE_PHONES } from "@/lib/officeverse/data";
 import {
-  buildScheduledAt,
-  createFollowUp,
-  displayDate,
   displayDateTime,
   shiftDateIST,
   todayIST,
   type FollowUpCustomer,
-  type FollowUpRecord,
 } from "@/lib/officeverse/followups";
-import { createLead } from "@/lib/officeverse/leads";
+import {
+  fuDtoToUi,
+  leadDtoToUi,
+  useAssignableClosers,
+  useCreateServerFollowUp,
+  useCreateServerLead,
+  useLeadDuplicateCheck,
+  useUploadLeadDocument,
+  LEAD_DOC_ACCEPT,
+  LEAD_DOC_MAX_BYTES,
+  type UiFollowUp,
+  type UiLead,
+} from "@/lib/officeverse/use-lead-lifecycle";
+import { isValidEmail, usPhoneDigits } from "@/lib/officeverse/phone";
+import { US_STATES, sanitizeZip } from "@/lib/officeverse/us-states";
 import { useSession } from "@/lib/officeverse/session";
-import type { Lead } from "@/lib/officeverse/types";
+import type { FieldCheckResult } from "@/server/leads/service";
 
 type Action = "" | "lead" | "followup";
 
@@ -53,45 +62,72 @@ export const Route = createFileRoute("/_shell/leads/new")({
   component: NewLeadPage,
 });
 
-type DupState =
-  | { kind: "idle" }
-  | { kind: "checking" }
-  | { kind: "clear" }
-  | { kind: "duplicate"; lead_id: string; submitted_by: string; status: string };
+/* --------------------------- inline field status ----------------------- */
 
-function DuplicateNotice({ state }: { state: DupState }) {
-  if (state.kind === "idle") return null;
-  if (state.kind === "checking")
+type FieldStatusKind = "none" | "checking" | "valid" | "invalid" | "duplicate";
+
+/** One-line inline validation / duplicate feedback under a field. `tone` lets
+ *  the phone use an ERROR-styled duplicate and the (optional) email a WARNING. */
+function FieldStatus({
+  kind,
+  invalidMsg,
+  dup,
+  tone = "error",
+  label,
+}: {
+  kind: FieldStatusKind;
+  invalidMsg: string;
+  dup: FieldCheckResult["duplicate"];
+  tone?: "error" | "warning";
+  /** "lead" — a phone/email that identifies a lead */
+  label: string;
+}) {
+  if (kind === "none") return null;
+  if (kind === "checking")
     return (
-      <p className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+      <p className="mt-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
         <Loader2 className="h-3.5 w-3.5 animate-spin" /> Checking…
       </p>
     );
-  if (state.kind === "clear")
+  if (kind === "invalid")
     return (
-      <p className="mt-2 flex items-center gap-2 text-xs font-medium text-success">
-        <CheckCircle2 className="h-3.5 w-3.5" /> No duplicate found — you&apos;re good to go.
+      <p className="mt-1.5 flex items-center gap-1.5 text-xs font-medium text-destructive">
+        <XCircle className="h-3.5 w-3.5" /> {invalidMsg}
       </p>
     );
-  return (
-    <div className="mt-3 rounded-lg border border-warning/40 bg-warning/10 p-3">
-      <p className="flex items-center gap-2 text-sm font-semibold text-warning">
-        <AlertTriangle className="h-4 w-4" /> Duplicate lead
+  if (kind === "valid")
+    return (
+      <p className="mt-1.5 flex items-center gap-1.5 text-xs font-medium text-success">
+        <CheckCircle2 className="h-3.5 w-3.5" /> No duplicate found.
       </p>
-      <dl className="mt-2 grid grid-cols-3 gap-2 text-xs">
-        <div>
-          <dt className="text-muted-foreground">Lead ID</dt>
-          <dd className="mt-0.5 font-mono">{state.lead_id}</dd>
-        </div>
-        <div>
-          <dt className="text-muted-foreground">Submitted by</dt>
-          <dd className="mt-0.5">{state.submitted_by}</dd>
-        </div>
-        <div>
-          <dt className="text-muted-foreground">Status</dt>
-          <dd className="mt-0.5">{state.status}</dd>
-        </div>
-      </dl>
+    );
+  // duplicate
+  const isWarn = tone === "warning";
+  return (
+    <div
+      className={
+        "mt-1.5 rounded-lg border p-2.5 text-xs " +
+        (isWarn
+          ? "border-warning/40 bg-warning/10 text-warning"
+          : "border-destructive/40 bg-destructive/10 text-destructive")
+      }
+    >
+      <p className="flex items-center gap-1.5 font-semibold">
+        <AlertTriangle className="h-3.5 w-3.5" />
+        {isWarn
+          ? `This ${label} is already on another lead`
+          : `Duplicate ${label} — a lead already exists`}
+      </p>
+      {dup?.visible && dup.lead_id ? (
+        <p className="mt-1 text-[11px] opacity-90">
+          Existing lead <span className="font-mono font-semibold">{dup.lead_id}</span>
+          {dup.status ? <> · status {dup.status}</> : null}
+        </p>
+      ) : (
+        <p className="mt-1 text-[11px] opacity-90">
+          The existing lead is owned by another team member.
+        </p>
+      )}
     </div>
   );
 }
@@ -103,31 +139,113 @@ function NewLeadPage() {
 
   const [action, setAction] = useState<Action>(search.action === "followup" ? "followup" : "");
   const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
+  const [phoneBlur, setPhoneBlur] = useState(false);
+  const [emailBlur, setEmailBlur] = useState(false);
+  const [submitAttempted, setSubmitAttempted] = useState(false);
   const [credit, setCredit] = useState("");
   const [currentLate, setCurrentLate] = useState("");
   const [closer, setCloser] = useState("");
   const [fuDate, setFuDate] = useState(search.date ?? "");
   const [fuTime, setFuTime] = useState("");
   const [fuComment, setFuComment] = useState("");
-  const [dup, setDup] = useState<DupState>({ kind: "idle" });
-  const [createdLead, setCreatedLead] = useState<Lead | null>(null);
-  const [createdFu, setCreatedFu] = useState<FollowUpRecord | null>(null);
+  const [createdLead, setCreatedLead] = useState<UiLead | null>(null);
+  const [createdFu, setCreatedFu] = useState<UiFollowUp | null>(null);
+  // §3/§6 — OPTIONAL supporting document for a new Lead. Never required.
+  const [docFile, setDocFile] = useState<File | null>(null);
+  const docInputRef = useRef<HTMLInputElement>(null);
+
+  const createLeadM = useCreateServerLead();
+  const createFuM = useCreateServerFollowUp();
+  const uploadDocM = useUploadLeadDocument();
+  const { closers } = useAssignableClosers();
+  const busy = createLeadM.isPending || createFuM.isPending || uploadDocM.isPending;
 
   const success = createdLead != null || createdFu != null;
 
+  /* ---- inline phone / email validation + authoritative duplicate check ---- *
+   * Client validation is UX only; `createLead` re-validates + re-checks the
+   * duplicate on submit (an Agent cannot bypass it). No localStorage.         */
+  const phoneDigits = usPhoneDigits(phone); // canonical 10, or null
+  const phoneRawDigits = phone.replace(/\D/g, "").length;
+  const emailTrim = email.trim();
+  const emailClientValid = emailTrim === "" || isValidEmail(emailTrim);
+
+  // debounced keys — only a fully-valid value triggers a server check
+  const [dupKeys, setDupKeys] = useState<{ phone: string | null; email: string | null }>({
+    phone: null,
+    email: null,
+  });
   useEffect(() => {
-    const digits = phone.replace(/\D/g, "");
-    if (digits.length < 10) {
-      setDup({ kind: "idle" });
-      return;
-    }
-    setDup({ kind: "checking" });
     const t = setTimeout(() => {
-      const hit = DUPLICATE_PHONES[digits.slice(-10)];
-      setDup(hit ? { kind: "duplicate", ...hit } : { kind: "clear" });
-    }, 700);
+      setDupKeys({
+        phone: phoneDigits,
+        email: emailTrim && isValidEmail(emailTrim) ? emailTrim.toLowerCase() : null,
+      });
+    }, 450);
     return () => clearTimeout(t);
-  }, [phone]);
+  }, [phoneDigits, emailTrim]);
+
+  const dupQ = useLeadDuplicateCheck(dupKeys);
+  const dupSettled = !dupQ.isFetching;
+
+  const phone_ = useMemo<{
+    kind: FieldStatusKind;
+    blocked: boolean;
+    dup: FieldCheckResult["duplicate"];
+  }>(() => {
+    if (phone.trim() === "") {
+      return { kind: submitAttempted ? "invalid" : "none", blocked: true, dup: null };
+    }
+    if (phoneDigits === null) {
+      // show the "invalid" message once the value looks complete, on blur, or on submit
+      const show = phoneRawDigits >= 10 || phoneBlur || submitAttempted;
+      return { kind: show ? "invalid" : "none", blocked: true, dup: null };
+    }
+    if (dupKeys.phone !== phoneDigits || !dupSettled) {
+      return { kind: "checking", blocked: true, dup: null };
+    }
+    const d = dupQ.data?.phone.duplicate ?? null;
+    return d
+      ? { kind: "duplicate", blocked: true, dup: d }
+      : { kind: "valid", blocked: false, dup: null };
+  }, [
+    phone,
+    phoneDigits,
+    phoneRawDigits,
+    phoneBlur,
+    submitAttempted,
+    dupKeys.phone,
+    dupSettled,
+    dupQ.data,
+  ]);
+
+  const email_ = useMemo<{
+    kind: FieldStatusKind;
+    formatBad: boolean;
+    dup: FieldCheckResult["duplicate"];
+  }>(() => {
+    if (emailTrim === "") return { kind: "none", formatBad: false, dup: null };
+    if (!emailClientValid) {
+      const show = emailBlur || submitAttempted || emailTrim.includes("@");
+      return { kind: show ? "invalid" : "none", formatBad: true, dup: null };
+    }
+    if (dupKeys.email !== emailTrim.toLowerCase() || !dupSettled) {
+      return { kind: "checking", formatBad: false, dup: null };
+    }
+    const d = dupQ.data?.email.duplicate ?? null;
+    return d
+      ? { kind: "duplicate", formatBad: false, dup: d }
+      : { kind: "valid", formatBad: false, dup: null };
+  }, [
+    emailTrim,
+    emailClientValid,
+    emailBlur,
+    submitAttempted,
+    dupKeys.email,
+    dupSettled,
+    dupQ.data,
+  ]);
 
   const readCustomer = (): FollowUpCustomer | null => {
     if (!formRef.current) return null;
@@ -135,7 +253,9 @@ function NewLeadPage() {
     const s = (k: string) => String(fd.get(k) ?? "").trim();
     if (!s("customer_name") || !s("phone")) return null;
     return {
-      date: s("lead_date") || shiftDateIST(),
+      // UAT #5: the capture date is derived server-side from the agent's shift.
+      // The client no longer sends one.
+      date: "",
       full_name: s("customer_name"),
       phone: s("phone"),
       email: s("email"),
@@ -150,53 +270,103 @@ function NewLeadPage() {
     };
   };
 
-  const submitLead = (c: FollowUpCustomer) => {
+  const submitLead = async (c: FollowUpCustomer) => {
     if (!user || !closer) return;
-    const lead = createLead({
-      customer_name: c.full_name,
-      email: c.email,
-      phone: c.phone,
-      ...(c.date ? { date: c.date } : {}),
-      address: c.address,
-      city: c.city,
-      state: c.state,
-      zip: c.zip,
-      debt_amount: c.debt_amount,
-      ...(c.credit ? { credit: c.credit } : {}),
-      ...(c.current_late ? { current_late: c.current_late } : {}),
-      comment: c.comment,
-      submitted_by: user.name,
-      assigned_closer: closer,
-      process: user.process,
-    });
-    setCreatedLead(lead);
+    try {
+      const res = await createLeadM.mutateAsync({
+        customer_name: c.full_name,
+        phone: c.phone,
+        ...(c.email ? { email: c.email } : {}),
+        ...(c.date ? { date: c.date } : {}),
+        ...(c.address ? { address: c.address } : {}),
+        ...(c.city ? { city: c.city } : {}),
+        ...(c.state ? { state: c.state } : {}),
+        ...(c.zip ? { zip: c.zip } : {}),
+        ...(c.debt_amount ? { debt_amount: c.debt_amount } : {}),
+        ...(c.credit ? { credit: c.credit } : {}),
+        ...(c.current_late ? { current_late: c.current_late } : {}),
+        ...(c.comment ? { comment: c.comment } : {}),
+        // canonical CL-##### code — the server re-authorises it against process
+        assigned_closer_code: closer,
+      });
+      const ui = leadDtoToUi(res.lead);
+      // §3 — the document is OPTIONAL. The lead is already saved; a failed
+      // upload never rolls the lead back, it only warns.
+      if (docFile) {
+        try {
+          await uploadDocM.mutateAsync({ lead_code: ui.lead_id, file: docFile });
+        } catch (err) {
+          toast.error(
+            err instanceof Error
+              ? `Lead created, but the document upload failed: ${err.message}`
+              : "Lead created, but the document upload failed.",
+          );
+        }
+      }
+      setCreatedLead(ui);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not create the lead");
+    }
   };
 
-  const submitFollowUp = (c: FollowUpCustomer) => {
+  const submitFollowUp = async (c: FollowUpCustomer) => {
     if (!user || !fuDate || !fuTime) return;
-    const rec = createFollowUp({
-      customer: c,
-      scheduled_at: buildScheduledAt(fuDate, fuTime),
-      comment: fuComment,
-      owner: {
-        id: user.id,
-        name: user.name,
-        role: user.role === "closer" ? "closer" : "agent",
-      },
-      created_by: user.name,
-    });
-    toast("✅ Follow-up scheduled", {
-      description: `${rec.customer_name} · ${displayDate(rec.scheduled_at)}`,
-    });
-    setCreatedFu(rec);
+    try {
+      const res = await createFuM.mutateAsync({
+        full_name: c.full_name,
+        phone: c.phone,
+        ...(c.email ? { email: c.email } : {}),
+        ...(c.address ? { address: c.address } : {}),
+        ...(c.city ? { city: c.city } : {}),
+        ...(c.state ? { state: c.state } : {}),
+        ...(c.zip ? { zip: c.zip } : {}),
+        ...(c.debt_amount ? { debt_amount: c.debt_amount } : {}),
+        ...(c.credit ? { credit: c.credit } : {}),
+        ...(c.current_late ? { current_late: c.current_late } : {}),
+        ...(c.date ? { date: c.date } : {}),
+        scheduled_date: fuDate,
+        scheduled_time: fuTime,
+        ...(fuComment || c.comment ? { comment: fuComment || c.comment } : {}),
+      });
+      const ui = fuDtoToUi(res.followUp);
+      toast("✅ Follow-up scheduled", {
+        description: `${ui.customer_name} · ${displayDateTime(ui.scheduled_at)}`,
+      });
+      setCreatedFu(ui);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not schedule the follow-up");
+    }
   };
 
   const submit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    if (busy) return;
+    setSubmitAttempted(true);
+
+    // Inline gate — the server ALSO re-validates + re-checks the duplicate.
+    if (phoneDigits === null) {
+      toast.error(
+        phone.trim() === ""
+          ? "Phone number is required."
+          : "Enter a valid US phone number before submitting.",
+      );
+      formRef.current?.querySelector<HTMLInputElement>("#phone")?.focus();
+      return;
+    }
+    if (phone_.dup) {
+      toast.error("This phone number already has a lead — duplicate leads are not allowed.");
+      return;
+    }
+    if (email_.formatBad) {
+      toast.error("The email address is not valid. Clear it or fix the format.");
+      formRef.current?.querySelector<HTMLInputElement>("#email")?.focus();
+      return;
+    }
+
     const c = readCustomer();
     if (!c) return;
-    if (action === "lead") submitLead(c);
-    else if (action === "followup") submitFollowUp(c);
+    if (action === "lead") void submitLead(c);
+    else if (action === "followup") void submitFollowUp(c);
   };
 
   const reset = () => {
@@ -204,9 +374,16 @@ function NewLeadPage() {
     setCreatedFu(null);
     setAction("");
     setPhone("");
+    setEmail("");
+    setPhoneBlur(false);
+    setEmailBlur(false);
+    setSubmitAttempted(false);
+    setDupKeys({ phone: null, email: null });
     setCredit("");
     setCurrentLate("");
     setCloser("");
+    setDocFile(null);
+    if (docInputRef.current) docInputRef.current.value = "";
     setFuDate("");
     setFuTime("");
     setFuComment("");
@@ -214,8 +391,16 @@ function NewLeadPage() {
   };
 
   const ownerLabel = user ? `${user.name} — ${user.role === "closer" ? "Closer" : "Agent"}` : "you";
+  // phone must be a valid US number with no known duplicate; email (optional)
+  // must not be malformed. An email DUPLICATE is a warning, not a blocker.
+  const contactOk = phoneDigits !== null && !phone_.dup && !email_.formatBad;
   const canSubmit =
-    action === "lead" ? Boolean(closer) : action === "followup" ? Boolean(fuDate && fuTime) : false;
+    contactOk &&
+    (action === "lead"
+      ? Boolean(closer)
+      : action === "followup"
+        ? Boolean(fuDate && fuTime)
+        : false);
 
   return (
     <div className="space-y-6">
@@ -230,40 +415,74 @@ function NewLeadPage() {
           description="Copy the customer's details from the dialer. The same information is used whether this becomes a Lead or a follow-up."
         >
           <div className="grid gap-5 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="lead_date">Date</Label>
-              <Input id="lead_date" name="lead_date" type="date" defaultValue={shiftDateIST()} />
-              <p className="text-xs text-muted-foreground">Operational shift date (IST)</p>
+            <div className="space-y-1.5 sm:col-span-2">
+              <Label>Capture date</Label>
+              <p className="rounded-lg bg-secondary/40 px-3 py-2 text-sm font-medium">
+                {shiftDateIST()} · your operational shift (IST)
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Set automatically from your assigned shift — it cannot be changed.
+              </p>
             </div>
-            <div className="hidden sm:block" aria-hidden />
             <div className="space-y-1.5 sm:col-span-2">
               <Label htmlFor="name">Full name</Label>
               <Input id="name" name="customer_name" placeholder="Enter customer name" required />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="phone">Phone number</Label>
+              <Label htmlFor="phone">
+                Phone number (US) <span className="text-destructive">*</span>
+              </Label>
               <Input
                 id="phone"
                 name="phone"
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
-                placeholder="Enter phone number"
+                onBlur={() => setPhoneBlur(true)}
+                placeholder="e.g. (305) 555-0123"
                 inputMode="tel"
+                aria-invalid={phone_.kind === "invalid" || phone_.kind === "duplicate"}
                 required
+              />
+              {phone_.kind === "none" ? (
+                <p className="text-xs text-muted-foreground">
+                  10-digit US number, or +1 followed by 10 digits.
+                </p>
+              ) : null}
+              <FieldStatus
+                kind={phone_.kind}
+                invalidMsg={
+                  phone.trim() === ""
+                    ? "Phone number is required."
+                    : "Enter a valid US phone number — 10 digits, or +1 followed by 10 digits."
+                }
+                dup={phone_.dup}
+                tone="error"
+                label="phone"
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="email">Email</Label>
+              <Label htmlFor="email">
+                Email <span className="text-xs font-normal text-muted-foreground">(optional)</span>
+              </Label>
               <Input
                 id="email"
                 name="email"
-                type="email"
+                type="text"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                onBlur={() => setEmailBlur(true)}
                 placeholder="Enter email address"
                 autoComplete="off"
+                inputMode="email"
+                aria-invalid={email_.kind === "invalid"}
               />
-            </div>
-            <div className="sm:col-span-2">
-              <DuplicateNotice state={dup} />
+              <FieldStatus
+                kind={email_.kind}
+                invalidMsg="That email address doesn't look valid."
+                dup={email_.dup}
+                tone="warning"
+                label="email"
+              />
             </div>
             <div className="space-y-1.5 sm:col-span-2">
               <Label htmlFor="address">Street address</Label>
@@ -276,11 +495,39 @@ function NewLeadPage() {
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label htmlFor="state">State</Label>
-                <Input id="state" name="state" placeholder="State" />
+                {user?.process === "US" ? (
+                  <select
+                    id="state"
+                    name="state"
+                    defaultValue=""
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <option value="">Select state…</option>
+                    {US_STATES.map((s) => (
+                      <option key={s.code} value={s.code}>
+                        {s.code} — {s.name}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <Input id="state" name="state" placeholder="State / province" />
+                )}
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="zip">ZIP</Label>
-                <Input id="zip" name="zip" placeholder="ZIP" />
+                <Input
+                  id="zip"
+                  name="zip"
+                  placeholder={user?.process === "US" ? "e.g. 02108" : "Postal code"}
+                  inputMode="numeric"
+                  autoComplete="postal-code"
+                  maxLength={10}
+                  pattern="\d{5}(-\d{4})?"
+                  onInput={(e) => {
+                    const el = e.currentTarget;
+                    el.value = sanitizeZip(el.value);
+                  }}
+                />
               </div>
             </div>
             <div className="space-y-1.5">
@@ -364,13 +611,64 @@ function NewLeadPage() {
                       <SelectValue placeholder="Select Closer" />
                     </SelectTrigger>
                     <SelectContent>
-                      {CLOSERS.map((c) => (
-                        <SelectItem key={c} value={c}>
-                          {c}
+                      {closers.map((c) => (
+                        <SelectItem key={c.code} value={c.code}>
+                          {c.name} · {c.code}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="lead_doc">Supporting Document (optional)</Label>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="rounded-lg"
+                      onClick={() => docInputRef.current?.click()}
+                    >
+                      {docFile ? "Change file" : "Choose File"}
+                    </Button>
+                    <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                      {docFile ? docFile.name : "No file chosen"}
+                    </span>
+                    {docFile ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="rounded-lg text-xs"
+                        onClick={() => {
+                          setDocFile(null);
+                          if (docInputRef.current) docInputRef.current.value = "";
+                        }}
+                      >
+                        Remove
+                      </Button>
+                    ) : null}
+                  </div>
+                  <input
+                    ref={docInputRef}
+                    id="lead_doc"
+                    type="file"
+                    className="hidden"
+                    accept={LEAD_DOC_ACCEPT}
+                    onChange={(e) => {
+                      const f = e.target.files?.[0] ?? null;
+                      if (f && f.size > LEAD_DOC_MAX_BYTES) {
+                        toast.error("That file is larger than the 10 MB limit.");
+                        e.target.value = "";
+                        return;
+                      }
+                      setDocFile(f);
+                    }}
+                  />
+                  <p className="text-[11px] text-muted-foreground">
+                    PDF or image (PNG/JPEG/WebP), up to 10 MB. Only people authorised for this lead
+                    can open it.
+                  </p>
                 </div>
                 <p className="text-xs text-muted-foreground">
                   The Lead is created with a unique Lead ID, transferred to the selected Closer, and
@@ -425,10 +723,16 @@ function NewLeadPage() {
         <div className="flex justify-end">
           <Button
             type="submit"
-            disabled={!canSubmit}
+            disabled={!canSubmit || busy}
             className="rounded-lg px-6 py-5 text-base font-semibold"
           >
-            {action === "followup" ? "Schedule Follow-up" : "Create Lead"}
+            {busy ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : action === "followup" ? (
+              "Schedule Follow-up"
+            ) : (
+              "Create Lead"
+            )}
           </Button>
         </div>
       </form>
@@ -450,7 +754,7 @@ function NewLeadPage() {
                   <LeadIdChip id={createdLead.lead_id} />
                 </div>
                 <p className="mt-3 text-sm text-muted-foreground">
-                  {createdLead.customer_name} · transferred to {closer}
+                  {createdLead.customer_name} · transferred to {createdLead.assigned_closer}
                 </p>
                 <div className="mt-6 flex flex-col gap-2">
                   <Button asChild className="rounded-lg">

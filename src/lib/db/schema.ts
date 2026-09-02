@@ -7,9 +7,9 @@
  * -----------
  * - Every table has an internal auto-increment `id` used for foreign keys.
  *   Business-facing identifiers (Lead code "TMI_00012007", Follow-up code
- *   "FU_00004415", "AG-00001", "CL-00001", "CLT-00001") are kept as their own
- *   UNIQUE `*_code` column so the existing Officeverse ID conventions are
- *   preserved exactly.
+ *   "FU_00004415", Agent "TMI_CC_001", Closer "TMI_CL_001", Client "CLT-00001")
+ *   are kept as their own UNIQUE `*_code` column so the existing Officeverse ID
+ *   conventions are preserved exactly.
  * - `datetime` columns hold IST WALL-CLOCK values ("YYYY-MM-DD HH:MM:SS"),
  *   matching the existing app (buildScheduledAt / scheduledParts / shiftDateIST).
  *   The mysql2 pool is configured with `dateStrings: true` so no timezone
@@ -107,6 +107,9 @@ export const EMAIL_TEMPLATES = [
   "LEAD_ASSIGNED",
   "LEAD_STATUS_CHANGED",
   "SYSTEM_NOTIFICATION",
+  // Agent-side UAT #15 / #16 — cron-driven daily emails
+  "FOLLOW_UP_DAILY_SUMMARY",
+  "BIRTHDAY_GREETING",
   // legacy outbox identifiers (pre-Phase-5 client renderers)
   "closer-followup",
   "shift-summary",
@@ -218,12 +221,21 @@ export const agents = mysqlTable(
     userId: int("user_id", { unsigned: true })
       .notNull()
       .references(() => users.id, { onDelete: "cascade", onUpdate: "cascade" }),
-    /** business "Agent ID", e.g. "AG-00001" */
+    /** canonical business "Agent ID", e.g. "TMI_CC_001" (legacy "AG-#####" rows
+     *  migrated by 0025) */
     agentCode: varchar("agent_code", { length: 24 }).notNull(),
     dob: dcol("dob"),
     monthlySalary: decimal("monthly_salary", { precision: 12, scale: 2 }).notNull().default("0.00"),
     /** Date of Registration = operational SHIFT DATE (Phase 7) */
     registeredOn: dcol("registered_on").notNull(),
+    /** Admin UAT Batch-2 follow-up §2 — official JOINING DATE. Authoritative
+     *  employee data; drives the salary-profile effective-from date and appears
+     *  on the salary slip. Nullable only so pre-existing rows migrate cleanly —
+     *  the create form always supplies it. */
+    joiningDate: dcol("joining_date"),
+    /** Staff Profile Management — work anniversary date, Admin/HR-correctable.
+     *  Distinct from `joiningDate`; nullable (not captured at creation). */
+    anniversaryDate: dcol("anniversary_date"),
     createdAt: dt("created_at").notNull(),
     updatedAt: dt("updated_at").notNull(),
   },
@@ -244,10 +256,13 @@ export const closers = mysqlTable(
     userId: int("user_id", { unsigned: true })
       .notNull()
       .references(() => users.id, { onDelete: "cascade", onUpdate: "cascade" }),
-    /** business "Closer ID", e.g. "CL-00001" */
+    /** canonical business "Closer ID", e.g. "TMI_CL_001" (legacy "CL-#####" rows
+     *  migrated by 0025) */
     closerCode: varchar("closer_code", { length: 24 }).notNull(),
     dob: dcol("dob"),
     registeredOn: dcol("registered_on").notNull(),
+    /** Staff Profile Management — work anniversary date, Admin/HR-correctable. */
+    anniversaryDate: dcol("anniversary_date"),
     createdAt: dt("created_at").notNull(),
     updatedAt: dt("updated_at").notNull(),
   },
@@ -907,6 +922,51 @@ export const attendance = mysqlTable(
 );
 
 /* ------------------------------------------------------------------ *
+ *  16b · shift_overrides  (Admin UAT Batch-2 follow-up §1)           *
+ *  A per-(process, operational-date) replacement of the default      *
+ *  shift window + late boundaries — temporary Saturday shifts, early *
+ *  shifts, DST / seasonal changes. Admin-only. Attendance for that   *
+ *  date classifies against the effective row; a row added later for  *
+ *  a different date never rewrites earlier attendance (touch only    *
+ *  ever recomputes the CURRENT operational date, and never a         *
+ *  corrected row).                                                   *
+ * ------------------------------------------------------------------ */
+
+export const shiftOverrides = mysqlTable(
+  "shift_overrides",
+  {
+    id: bigint("id", { mode: "number", unsigned: true }).autoincrement().primaryKey(),
+    process: mysqlEnum("process", PROCESS_CODES).notNull(),
+    /** the operational SHIFT DATE this override applies to ("YYYY-MM-DD") */
+    operationalDate: dcol("operational_date").notNull(),
+    /** "HH:MM" 24h IST */
+    startHhmm: varchar("start_hhmm", { length: 5 }).notNull(),
+    endHhmm: varchar("end_hhmm", { length: 5 }).notNull(),
+    /** optional explicit late boundaries; when null they are derived from the
+     *  start time (reporting = start[-10m for US], short-late = reporting+1m,
+     *  late = start+31m) — the same shape as the frozen default rules. */
+    reportingHhmm: varchar("reporting_hhmm", { length: 5 }),
+    shortLateFromHhmm: varchar("short_late_from_hhmm", { length: 5 }),
+    lateFromHhmm: varchar("late_from_hhmm", { length: 5 }),
+    reason: varchar("reason", { length: 255 }),
+    createdByUserId: int("created_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    updatedByUserId: int("updated_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    createdAt: dt("created_at").notNull(),
+    updatedAt: dt("updated_at").notNull(),
+  },
+  (t) => ({
+    processDateUq: unique("shift_overrides_process_date_uq").on(t.process, t.operationalDate),
+    dateIdx: index("shift_overrides_date_idx").on(t.operationalDate),
+  }),
+);
+
+/* ------------------------------------------------------------------ *
  *  17 · leave_requests  (HR Leave / Off / Sandwich — Phase 11)       *
  *  Calendar-date based (NOT operational shift date). Only APPROVED   *
  *  rows participate in the sandwich calculation.                     *
@@ -1195,6 +1255,13 @@ export const payrollRuns = mysqlTable(
     adjustmentsTotal: decimal("adjustments_total", { precision: 12, scale: 2 })
       .notNull()
       .default("0.00"),
+    /* ---- Admin UAT Batch-2 §5 — Late-Units (see server/hr/late-units.ts).
+     *      Additive; all default to 0 so pre-Batch-2 rows keep their meaning.
+     *      lateDeduction is the ONE-day salary cut when lateUnits ≥ 3. ---- */
+    lateShortCount: int("late_short_count", { unsigned: true }).notNull().default(0),
+    lateFullCount: int("late_full_count", { unsigned: true }).notNull().default(0),
+    lateUnits: decimal("late_units", { precision: 4, scale: 1 }).notNull().default("0.0"),
+    lateDeduction: decimal("late_deduction", { precision: 12, scale: 2 }).notNull().default("0.00"),
     /** provenance — which config / bonus row produced this snapshot */
     salaryProfileId: bigint("salary_profile_id", { mode: "number", unsigned: true }).references(
       () => salaryProfiles.id,
@@ -1407,6 +1474,32 @@ export const salarySlips = mysqlTable(
       PAYROLL_STATUSES,
     ).notNull(),
     calculationVersion: varchar("calculation_version", { length: 16 }).notNull().default("v1"),
+    /* ---- Admin UAT Batch-2 follow-up §3 — full breakdown snapshot ----
+     *  Additive; every column defaults so pre-existing slip rows keep meaning.
+     *  These freeze the exact figures the PDF renders so a re-render stays
+     *  byte-identical even after payroll config / company branding changes. */
+    monthlyBaseSalary: decimal("monthly_base_salary", { precision: 12, scale: 2 })
+      .notNull()
+      .default("0.00"),
+    payableBaseSalary: decimal("payable_base_salary", { precision: 12, scale: 2 })
+      .notNull()
+      .default("0.00"),
+    unpaidLeaveDays: int("unpaid_leave_days", { unsigned: true }).notNull().default(0),
+    lateShortCount: int("late_short_count", { unsigned: true }).notNull().default(0),
+    lateFullCount: int("late_full_count", { unsigned: true }).notNull().default(0),
+    lateUnits: decimal("late_units", { precision: 4, scale: 1 }).notNull().default("0.0"),
+    lateDeduction: decimal("late_deduction", { precision: 12, scale: 2 }).notNull().default("0.00"),
+    employeeCode: varchar("employee_code", { length: 32 }).notNull().default(""),
+    joiningDate: dcol("joining_date"),
+    /* company branding, snapshotted at generation from the ONE central source */
+    companyName: varchar("company_name", { length: 160 }).notNull().default("TMI Officeverse"),
+    companyLegalName: varchar("company_legal_name", { length: 200 }),
+    companyAddress: varchar("company_address", { length: 400 }),
+    companyTaxId: varchar("company_tax_id", { length: 40 }),
+    companyFooter: varchar("company_footer", { length: 400 }),
+    companyLogoMime: varchar("company_logo_mime", { length: 64 }),
+    /** base64 of the exact logo bytes used in this PDF (nullable) */
+    companyLogoData: mediumtext("company_logo_data"),
     /* ---- document ---- */
     fileName: varchar("file_name", { length: 255 }).notNull(),
     /** opaque key into the storage abstraction (dev = in-memory) */
@@ -1495,7 +1588,13 @@ export const gamificationPointRules = mysqlTable(
   "gamification_point_rules",
   {
     id: int("id", { unsigned: true }).autoincrement().primaryKey(),
-    event: mysqlEnum("event", GAMIFICATION_EVENTS).notNull(),
+    /**
+     * Legacy flat-rule event key. Widened from an ENUM to VARCHAR(64) in
+     * migration 0014 so the open-ended Scoring Engine can introduce new event
+     * domains without a schema change. Existing values are unchanged and remain
+     * valid; this table stays a read-only fallback (Scoring Engine phase 2+).
+     */
+    event: varchar("event", { length: 64 }).notNull(),
     /** points awarded for one occurrence — CONFIGURABLE, defaults to 0 */
     points: int("points").notNull().default(0),
     enabled: boolean("enabled").notNull().default(true),
@@ -1525,7 +1624,13 @@ export const gamificationPointTransactions = mysqlTable(
       .references(() => users.id, { onDelete: "restrict", onUpdate: "cascade" }),
     role: mysqlEnum("role", ["agent", "closer"]).notNull(),
     process: mysqlEnum("process", PROCESS_CODES).notNull(),
-    event: mysqlEnum("event", GAMIFICATION_EVENTS).notNull(),
+    /**
+     * Event key. Widened from an ENUM to VARCHAR(64) in migration 0014 so the
+     * open-ended Scoring Engine can award against new event domains without a
+     * schema change. Every pre-0014 value ("LEAD_SUBMITTED" … "ADMIN_ADJUSTMENT")
+     * remains valid and unchanged.
+     */
+    event: varchar("event", { length: 64 }).notNull(),
     points: int("points").notNull(),
     /** operational SHIFT DATE the event belongs to, "YYYY-MM-DD" (server-derived) */
     operationalDate: dcol("operational_date").notNull(),
@@ -1539,6 +1644,21 @@ export const gamificationPointTransactions = mysqlTable(
     /** for a REVERSED row: which txn reversed it (audit trail, never deleted) */
     reversalOfId: bigint("reversal_of_id", { mode: "number", unsigned: true }),
     reason: varchar("reason", { length: 255 }),
+    /* -- Scoring Engine attribution (migration 0014; all NULL for legacy rows). *
+     *  A NULL rule_id means "pre-engine / legacy flat-rule award". The Scoring  *
+     *  Engine writes every one of these so a point can be explained forever.    */
+    ruleId: int("rule_id", { unsigned: true }).references((): AnyMySqlColumn => scoringRules.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    ruleVersion: int("rule_version"),
+    ruleName: varchar("rule_name", { length: 120 }),
+    /** evaluation context — payload fields that mattered, condition results, band chosen */
+    context: json("context"),
+    scoreRunId: bigint("score_run_id", { mode: "number", unsigned: true }).references(
+      (): AnyMySqlColumn => scoringRuns.id,
+      { onDelete: "set null", onUpdate: "cascade" },
+    ),
     createdByUserId: int("created_by_user_id", { unsigned: true }).references(() => users.id, {
       onDelete: "set null",
       onUpdate: "cascade",
@@ -1618,6 +1738,112 @@ export const gamificationStreaks = mysqlTable(
   },
   (t) => ({
     userTypeUq: unique("gamification_streak_user_type_uq").on(t.userId, t.streakType),
+  }),
+);
+
+/* ================================================================== *
+ *  SCORING ENGINE FOUNDATION (Phase 2 — migration 0014)               *
+ *                                                                    *
+ *  Open-ended, Admin-configurable scoring. Completely separated from  *
+ *  CRM operational workflows: nothing here is imported by leads /     *
+ *  follow-ups / assignments / HR / payroll, and this layer never      *
+ *  mutates a CRM row. It only APPENDS to the existing immutable        *
+ *  gamification_point_transactions ledger (there is no second ledger). *
+ *                                                                    *
+ *  Additive-only. Ships with ZERO seeded scoring rules and behind the  *
+ *  SCORING_ENGINE_ENABLED flag (default off). Point VALUES are 100%    *
+ *  Admin-authored — never hard-coded, never money.                    *
+ * ================================================================== */
+
+export const SCORING_RULE_MATCHING_MODES = ["FIRST_MATCH", "HIGHEST_MATCH", "ALL_MATCHES"] as const;
+
+/* -- scoring_rules  (MUTABLE header only — never condition/outcome) -- */
+export const scoringRules = mysqlTable(
+  "scoring_rules",
+  {
+    id: int("id", { unsigned: true }).autoincrement().primaryKey(),
+    name: varchar("name", { length: 120 }).notNull(),
+    /** BusinessEvent.type this rule scores — a domain string, validated by the event registry */
+    event: varchar("event", { length: 64 }).notNull(),
+    /** optional audience narrowing: { roles?, processes?, teams?, closerIds?, agentIds?, closerTenureDaysMin?, closerTenureDaysMax? } */
+    appliesTo: json("applies_to"),
+    ruleMatchingMode: mysqlEnum("rule_matching_mode", SCORING_RULE_MATCHING_MODES)
+      .notNull()
+      .default("FIRST_MATCH"),
+    /** lower = evaluated first */
+    priority: int("priority").notNull().default(100),
+    enabled: boolean("enabled").notNull().default(false),
+    /** points to the currently-active scoring_rule_versions.version */
+    currentVersion: int("current_version").notNull().default(1),
+    createdByUserId: int("created_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    createdAt: dt("created_at").notNull(),
+    updatedAt: dt("updated_at").notNull(),
+  },
+  (t) => ({
+    eventIdx: index("scoring_rules_event_idx").on(t.event),
+    enabledEventIdx: index("scoring_rules_enabled_event_idx").on(t.enabled, t.event),
+  }),
+);
+
+/* -- scoring_rule_versions  (IMMUTABLE snapshots — never updated) ---- *
+ *  Editing a rule appends a new version; the historical ledger keeps    *
+ *  scoring at the version that was effective on the event's operational *
+ *  date. Version rows are the historical-integrity anchor.             */
+export const scoringRuleVersions = mysqlTable(
+  "scoring_rule_versions",
+  {
+    id: int("id", { unsigned: true }).autoincrement().primaryKey(),
+    ruleId: int("rule_id", { unsigned: true })
+      .notNull()
+      .references(() => scoringRules.id, { onDelete: "cascade", onUpdate: "cascade" }),
+    version: int("version").notNull(),
+    nameSnapshot: varchar("name_snapshot", { length: 120 }).notNull(),
+    eventSnapshot: varchar("event_snapshot", { length: 64 }).notNull(),
+    appliesToSnapshot: json("applies_to_snapshot"),
+    /** arbitrarily nested { op:"AND"|"OR", nodes:[…] } with { field, operator, value, valueType } leaves; NULL = match-all */
+    conditionTree: json("condition_tree"),
+    /** { kind:"FLAT"|"BANDS"|"BASE_PLUS_BONUS", … } — points are Admin-authored, negatives allowed */
+    outcome: json("outcome").notNull(),
+    /** version selection window keyed on BusinessEvent.operationalDate: from <= date < until */
+    effectiveFrom: dcol("effective_from").notNull(),
+    effectiveUntil: dcol("effective_until"),
+    createdByUserId: int("created_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    createdAt: dt("created_at").notNull(),
+  },
+  (t) => ({
+    ruleVersionUq: unique("scoring_rule_versions_rule_version_uq").on(t.ruleId, t.version),
+    ruleIdx: index("scoring_rule_versions_rule_idx").on(t.ruleId),
+  }),
+);
+
+/* -- scoring_runs  (audit of EVERY evaluated event; run-once) -------- *
+ *  UNIQUE(event_type, source_type, source_id) makes ingest idempotent  *
+ *  against retries / restarts / duplicate dispatch. A run row exists    *
+ *  even when zero points were awarded.                                 */
+export const scoringRuns = mysqlTable(
+  "scoring_runs",
+  {
+    id: bigint("id", { mode: "number", unsigned: true }).autoincrement().primaryKey(),
+    eventType: varchar("event_type", { length: 64 }).notNull(),
+    sourceType: varchar("source_type", { length: 40 }).notNull(),
+    sourceId: varchar("source_id", { length: 64 }).notNull(),
+    subjectUserId: int("subject_user_id", { unsigned: true }).notNull(),
+    operationalDate: dcol("operational_date").notNull(),
+    occurredAt: dt("occurred_at").notNull(),
+    payloadSnapshot: json("payload_snapshot"),
+    matchedRuleIds: json("matched_rule_ids"),
+    awardedPointsTotal: int("awarded_points_total").notNull().default(0),
+    createdAt: dt("created_at").notNull(),
+  },
+  (t) => ({
+    runUq: unique("scoring_runs_event_source_uq").on(t.eventType, t.sourceType, t.sourceId),
+    subjectIdx: index("scoring_runs_subject_idx").on(t.subjectUserId),
   }),
 );
 
@@ -1744,6 +1970,17 @@ export const officeTvAnnouncements = mysqlTable(
     durationMs: int("duration_ms", { unsigned: true }).notNull().default(12000),
     priority: mysqlEnum("priority", TV_ANNOUNCEMENT_PRIORITIES).notNull().default("NORMAL"),
     status: mysqlEnum("status", TV_ANNOUNCEMENT_STATUSES).notNull().default("scheduled"),
+    /* -- Phase 10 Stage 2 — per-announcement audio / TTS / celebration.  *
+     *  Additive + nullable: an announcement created before Stage 2 keeps  *
+     *  working (no TTS, no cue sounds). PRESENTATION ONLY — never money.  */
+    ttsEnabled: boolean("tts_enabled").notNull().default(false),
+    /** { voiceName?: string, rate: number, pitch: number, volume: number, lang: string } */
+    ttsConfig: json("tts_config"),
+    /** a CueSound token — none | bell | chime | success | applause | victory | alert */
+    openingSound: varchar("opening_sound", { length: 16 }),
+    closingSound: varchar("closing_sound", { length: 16 }),
+    /** optional celebration_profiles.id to play as the mid-sequence visual (soft ref) */
+    celebrationProfileId: int("celebration_profile_id", { unsigned: true }),
     /** IST wall-clock; null = show immediately on publish */
     publishAt: dt("publish_at"),
     expiresAt: dt("expires_at"),
@@ -1798,6 +2035,41 @@ export const officeTvEvents = mysqlTable(
  *  Keeps demo/seed data strictly separate from production (Phase 19). *
  * ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ *
+ *  COMPANY PROFILE / OFFICIAL BRANDING  (Admin UAT Batch-2 §7)       *
+ *  ONE singleton row (id = 1). The ONE official logo + company       *
+ *  details reused by every official output — salary slips, birthday  *
+ *  emails, daily follow-up emails, HR/Admin announcements, future     *
+ *  official employee emails, printable HR/payroll documents.          *
+ *  Admin-only to change. No per-module logo upload anywhere else.     *
+ * ------------------------------------------------------------------ */
+export const companyProfile = mysqlTable("company_profile", {
+  id: int("id", { unsigned: true }).primaryKey().default(1),
+  /** display name used across the product + official outputs */
+  companyName: varchar("company_name", { length: 160 }).notNull().default("TMI Officeverse"),
+  /** legal / registered name for payroll + official documents (optional) */
+  legalName: varchar("legal_name", { length: 200 }),
+  /** the ONE official logo, stored inline (small): mime + base64 bytes. Served
+   *  by GET /api/branding/logo and embedded in HTML emails. */
+  logoMime: varchar("logo_mime", { length: 64 }),
+  logoData: mediumtext("logo_data"),
+  logoUpdatedAt: dt("logo_updated_at"),
+  /** registered address block (multiline) for salary slips / official docs */
+  addressLine: varchar("address_line", { length: 400 }),
+  /** tax / registration id (e.g. GSTIN / PAN) for payroll docs */
+  taxId: varchar("tax_id", { length: 40 }),
+  /** official contact email / phone shown on documents */
+  contactEmail: varchar("contact_email", { length: 191 }),
+  contactPhone: varchar("contact_phone", { length: 40 }),
+  /** footer / disclaimer line for official documents */
+  documentFooter: varchar("document_footer", { length: 400 }),
+  updatedByUserId: int("updated_by_user_id", { unsigned: true }).references(() => users.id, {
+    onDelete: "set null",
+    onUpdate: "cascade",
+  }),
+  updatedAt: dt("updated_at").notNull(),
+});
+
 export const schemaMeta = mysqlTable("schema_meta", {
   id: int("id", { unsigned: true }).primaryKey().default(1),
   /** "empty" until an admin explicitly imports or an admin user is created */
@@ -1806,6 +2078,450 @@ export const schemaMeta = mysqlTable("schema_meta", {
   appVersion: varchar("app_version", { length: 40 }),
   note: varchar("note", { length: 255 }),
 });
+
+/* ------------------------------------------------------------------ *
+ *  36 · INCENTIVE ENGINE (Phase 9)                                    *
+ *                                                                    *
+ *  CRM EVENT → SCORING ENGINE → POINT LEDGER → PERFORMANCE/LEADERBOARD *
+ *            → [ INCENTIVE ENGINE (these tables) ] → INCENTIVE RESULT  *
+ *                                                                    *
+ *  The Incentive Engine decides WHO / WHICH PERIOD / WHICH SCHEME /   *
+ *  ELIGIBILITY / REWARD from the AUTHORITATIVE Phase-8 performance     *
+ *  snapshot. It NEVER scores or re-computes points. NO payroll link:  *
+ *  a finalized incentive result is entitlement data only — it never   *
+ *  writes a salary slip / payroll run / payment transaction.          *
+ * ------------------------------------------------------------------ */
+
+export const INCENTIVE_PERIOD_TYPES = ["daily", "weekly", "monthly", "custom"] as const;
+/** how a scheme combines with OTHER matching schemes in one calculation run.
+ *  priority (lower number first) is always the deterministic tie-break. */
+export const INCENTIVE_COMBINE_MODES = ["independent", "exclusive", "highest"] as const;
+export const INCENTIVE_REWARD_KINDS = ["FIXED", "TIERED", "PERCENT", "RECOGNITION"] as const;
+/** result lifecycle. Non-pay outcomes are first-class, not errors. */
+export const INCENTIVE_RESULT_STATUSES = [
+  "CALCULATED",
+  "REVIEWED",
+  "APPROVED",
+  "FINALIZED",
+  "REVERSED",
+  "NOT_ELIGIBLE",
+  "NO_MATCH",
+  "OUT_OF_SCOPE",
+] as const;
+
+/* -- incentive_schemes  (mutable header; points to the active version) -- */
+export const incentiveSchemes = mysqlTable(
+  "incentive_schemes",
+  {
+    id: int("id", { unsigned: true }).autoincrement().primaryKey(),
+    name: varchar("name", { length: 120 }).notNull(),
+    description: varchar("description", { length: 400 }),
+    enabled: boolean("enabled").notNull().default(false),
+    periodType: mysqlEnum("period_type", INCENTIVE_PERIOD_TYPES).notNull().default("monthly"),
+    /** lower = evaluated / preferred first (deterministic tie-break) */
+    priority: int("priority").notNull().default(100),
+    combineMode: mysqlEnum("combine_mode", INCENTIVE_COMBINE_MODES)
+      .notNull()
+      .default("independent"),
+    /** points to the currently-active incentive_scheme_versions.version */
+    currentVersion: int("current_version").notNull().default(1),
+    createdByUserId: int("created_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    createdAt: dt("created_at").notNull(),
+    updatedAt: dt("updated_at").notNull(),
+  },
+  (t) => ({
+    enabledIdx: index("incentive_schemes_enabled_idx").on(t.enabled),
+  }),
+);
+
+/* -- incentive_scheme_versions  (IMMUTABLE snapshots — never updated) --- *
+ *  Selected by effective-date the same half-open way scoring versions are: *
+ *  effective_from <= periodStart AND (effective_until IS NULL OR periodStart < effective_until) */
+export const incentiveSchemeVersions = mysqlTable(
+  "incentive_scheme_versions",
+  {
+    id: int("id", { unsigned: true }).autoincrement().primaryKey(),
+    schemeId: int("scheme_id", { unsigned: true })
+      .notNull()
+      .references(() => incentiveSchemes.id, { onDelete: "cascade", onUpdate: "cascade" }),
+    version: int("version").notNull(),
+    nameSnapshot: varchar("name_snapshot", { length: 120 }).notNull(),
+    periodTypeSnapshot: mysqlEnum("period_type_snapshot", INCENTIVE_PERIOD_TYPES).notNull(),
+    /** { processes?: string[], roles?: string[], teams?: string[], userIds?: number[] } — null = everyone */
+    scope: json("scope"),
+    /** eligibility condition tree over Phase-8 metrics:
+     *  { op:"AND"|"OR", nodes:[ … | { metric, operator, value } ] } — null = always eligible */
+    eligibility: json("eligibility"),
+    /** { kind:"FIXED"|"TIERED"|"PERCENT"|"RECOGNITION", … } — admin/closer authored */
+    reward: json("reward").notNull(),
+    currency: varchar("currency", { length: 8 }).notNull().default("INR"),
+    effectiveFrom: dcol("effective_from").notNull(),
+    effectiveUntil: dcol("effective_until"),
+    createdByUserId: int("created_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    createdAt: dt("created_at").notNull(),
+  },
+  (t) => ({
+    schemeVersionUq: unique("incentive_scheme_versions_scheme_version_uq").on(
+      t.schemeId,
+      t.version,
+    ),
+    schemeIdx: index("incentive_scheme_versions_scheme_idx").on(t.schemeId),
+  }),
+);
+
+/* -- incentive_results  (persisted calculation; historical + immutable once FINALIZED) -- */
+export const incentiveResults = mysqlTable(
+  "incentive_results",
+  {
+    id: bigint("id", { mode: "number", unsigned: true }).autoincrement().primaryKey(),
+    schemeId: int("scheme_id", { unsigned: true })
+      .notNull()
+      .references(() => incentiveSchemes.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    /** the scheme VERSION this result was calculated against — never re-selected later */
+    schemeVersion: int("scheme_version").notNull(),
+    userId: int("user_id", { unsigned: true })
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    /** inclusive operational-date window (Phase-8 semantics) */
+    periodFrom: dcol("period_from").notNull(),
+    periodTo: dcol("period_to").notNull(),
+    status: mysqlEnum("status", INCENTIVE_RESULT_STATUSES).notNull().default("CALCULATED"),
+    /** authoritative points for the window (from the Phase-8 snapshot, not recomputed) */
+    points: int("points").notNull().default(0),
+    rewardKind: mysqlEnum("reward_kind", INCENTIVE_REWARD_KINDS).notNull(),
+    /** integer reward amount in the scheme's currency unit; 0 for RECOGNITION / not eligible */
+    rewardAmount: int("reward_amount").notNull().default(0),
+    currency: varchar("currency", { length: 8 }).notNull().default("INR"),
+    /** optional non-monetary label for a RECOGNITION reward */
+    rewardLabel: varchar("reward_label", { length: 120 }),
+    /** the Phase-8 qualifying metrics used */
+    metrics: json("metrics"),
+    /** full explanation: conditions evaluated, pass/fail, matched tier, reason */
+    explanation: json("explanation"),
+    /** deterministic idempotency key: `<schemeId>:<schemeVersion>:<userId>:<from>:<to>` */
+    dedupeKey: varchar("dedupe_key", { length: 191 }).notNull(),
+    calculatedByUserId: int("calculated_by_user_id", { unsigned: true }).references(
+      () => users.id,
+      {
+        onDelete: "set null",
+        onUpdate: "cascade",
+      },
+    ),
+    calculatedAt: dt("calculated_at").notNull(),
+    reviewedByUserId: int("reviewed_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    reviewedAt: dt("reviewed_at"),
+    approvedByUserId: int("approved_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    approvedAt: dt("approved_at"),
+    finalizedByUserId: int("finalized_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    finalizedAt: dt("finalized_at"),
+    reversedByUserId: int("reversed_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    reversedAt: dt("reversed_at"),
+    reason: varchar("reason", { length: 255 }),
+    createdAt: dt("created_at").notNull(),
+    updatedAt: dt("updated_at").notNull(),
+  },
+  (t) => ({
+    dedupeUq: unique("incentive_results_dedupe_uq").on(t.dedupeKey),
+    userIdx: index("incentive_results_user_idx").on(t.userId, t.periodFrom),
+    schemeIdx: index("incentive_results_scheme_idx").on(t.schemeId, t.status),
+  }),
+);
+
+/* ------------------------------------------------------------------ *
+ *  37 · CELEBRATION PROFILES (Phase 10 — Recognition Command Center) *
+ *                                                                    *
+ *  Admin / Operations-Manager authored. Composes recognition VISUAL  *
+ *  + AUDIO effects into a named, enable/disable-able profile.        *
+ *  PRESENTATION ONLY: a profile never scores, never awards points,   *
+ *  never reads or writes payroll / salary / incentive money.         *
+ *  Historical `office_tv_events` rows are not replayed against a      *
+ *  profile, so ONE mutable row + before/after audit is sufficient    *
+ *  (no immutable per-version snapshots like incentive schemes).      *
+ * ------------------------------------------------------------------ */
+
+/** presentation INTENSITY band a profile renders at — never a business level */
+export const CELEBRATION_PROFILE_LEVELS = ["LEVEL_1", "LEVEL_2", "LEVEL_3", "LEVEL_4"] as const;
+/** the recognition trigger a profile is bound to; a null column = manual / unbound */
+export const CELEBRATION_PROFILE_TRIGGERS = [
+  "LEAD_SUBMITTED",
+  "LEAD_ACCEPTED",
+  "SALE",
+  "THIRD_ACCEPTED_LEAD",
+  "TEAM_MILESTONE",
+  "ACHIEVEMENT_UNLOCKED",
+  "MANUAL",
+] as const;
+
+export const celebrationProfiles = mysqlTable(
+  "celebration_profiles",
+  {
+    id: int("id", { unsigned: true }).autoincrement().primaryKey(),
+    name: varchar("name", { length: 120 }).notNull(),
+    description: varchar("description", { length: 400 }),
+    enabled: boolean("enabled").notNull().default(false),
+    recognitionLevel: mysqlEnum("recognition_level", CELEBRATION_PROFILE_LEVELS)
+      .notNull()
+      .default("LEVEL_1"),
+    /** null = manual / unbound (only played via Operations "Celebrate now") */
+    triggerEvent: mysqlEnum("trigger_event", CELEBRATION_PROFILE_TRIGGERS),
+    /** lower = chosen first when several enabled profiles match one trigger */
+    priority: int("priority").notNull().default(100),
+    /** composed effect / show / sound / TTS spec — validated + normalised by
+     *  server/live/celebration-profile.ts; never rendered raw */
+    config: json("config").notNull(),
+    createdByUserId: int("created_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    createdAt: dt("created_at").notNull(),
+    updatedAt: dt("updated_at").notNull(),
+  },
+  (t) => ({
+    enabledIdx: index("celebration_profiles_enabled_idx").on(t.enabled, t.triggerEvent),
+  }),
+);
+
+/* ------------------------------------------------------------------ *
+ *  38 · MILESTONE ENGINE (Phase 10 Stage 4)                          *
+ *                                                                    *
+ *  BUSINESS EVENT → SCORING ENGINE → POINT LEDGER                     *
+ *      → [ MILESTONE ENGINE (these tables) ] → RECOGNITION            *
+ *      → CELEBRATION / ANNOUNCEMENT → OFFICE TV                       *
+ *                                                                    *
+ *  Admin-configured. It CONSUMES authoritative ledger / performance   *
+ *  data — it NEVER scores, never awards points, never writes payroll  *
+ *  / salary / incentive. `milestone_triggers` is the idempotency +    *
+ *  history store (unique dedupe key per fire).                        *
+ * ------------------------------------------------------------------ */
+
+export const MILESTONE_TYPES = [
+  "INDIVIDUAL_COUNT",
+  "INDIVIDUAL_POINTS",
+  "INDIVIDUAL_EVENT",
+  "TEAM_COUNT",
+  "TEAM_POINTS",
+  "TEAM_EVENT",
+] as const;
+/** operational-date window the threshold is measured over (Phase-8 semantics) */
+export const MILESTONE_PERIODS = ["DAILY", "WEEKLY", "MONTHLY", "ALL_TIME"] as const;
+/** how often one milestone may fire. ONCE is the safe non-duplicating default. */
+export const MILESTONE_TRIGGER_POLICIES = [
+  "ONCE",
+  "PER_PERIOD",
+  "EVERY_THRESHOLD_CROSSING",
+] as const;
+export const MILESTONE_LEVELS = ["LEVEL_1", "LEVEL_2", "LEVEL_3", "LEVEL_4"] as const;
+
+/* -- milestones  (mutable definition — Admin governance) -------------- */
+export const milestones = mysqlTable(
+  "milestones",
+  {
+    id: int("id", { unsigned: true }).autoincrement().primaryKey(),
+    name: varchar("name", { length: 120 }).notNull(),
+    description: varchar("description", { length: 400 }),
+    enabled: boolean("enabled").notNull().default(false),
+    type: mysqlEnum("type", MILESTONE_TYPES).notNull(),
+    /** ledger event key for *_COUNT / *_EVENT types (e.g. "LEAD_ACCEPTED", "SALE");
+     *  ignored for *_POINTS types (which sum the ACTIVE points ledger) */
+    metric: varchar("metric", { length: 64 }),
+    /** authoritative value that must be reached — always > 0, never hard-coded */
+    threshold: int("threshold").notNull(),
+    period: mysqlEnum("period", MILESTONE_PERIODS).notNull().default("ALL_TIME"),
+    triggerPolicy: mysqlEnum("trigger_policy", MILESTONE_TRIGGER_POLICIES)
+      .notNull()
+      .default("ONCE"),
+    /** { processes?: string[] } — null = every process */
+    scope: json("scope"),
+    priority: int("priority").notNull().default(100),
+    recognitionLevel: mysqlEnum("recognition_level", MILESTONE_LEVELS).notNull().default("LEVEL_2"),
+    /** optional Stage-1 celebration profile; null → the default recognition */
+    celebrationProfileId: int("celebration_profile_id", { unsigned: true }),
+    /** optional Stage-2 announcement to also play; null → none */
+    announcementId: int("announcement_id", { unsigned: true }),
+    effectiveFrom: dcol("effective_from").notNull(),
+    effectiveUntil: dcol("effective_until"),
+    createdByUserId: int("created_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    createdAt: dt("created_at").notNull(),
+    updatedAt: dt("updated_at").notNull(),
+  },
+  (t) => ({
+    enabledIdx: index("milestones_enabled_idx").on(t.enabled, t.type),
+  }),
+);
+
+/* -- milestone_triggers  (idempotency + history — append-only) ------- */
+export const milestoneTriggers = mysqlTable(
+  "milestone_triggers",
+  {
+    id: bigint("id", { mode: "number", unsigned: true }).autoincrement().primaryKey(),
+    milestoneId: int("milestone_id", { unsigned: true })
+      .notNull()
+      .references(() => milestones.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    /** null = a TEAM milestone (no individual subject — never fabricated) */
+    userId: int("user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "restrict",
+      onUpdate: "cascade",
+    }),
+    /** "all" | "YYYY-MM-DD" | ISO-week Monday | "YYYY-MM" */
+    periodKey: varchar("period_key", { length: 24 }).notNull(),
+    /** the source event that crossed the threshold */
+    sourceType: varchar("source_type", { length: 40 }),
+    sourceId: varchar("source_id", { length: 64 }),
+    thresholdValue: int("threshold_value").notNull(),
+    /** the authoritative value at the moment it fired */
+    actualValue: int("actual_value").notNull(),
+    /** deterministic: retry of the same source event → same key → no 2nd fire */
+    dedupeKey: varchar("dedupe_key", { length: 191 }).notNull(),
+    /** the recognition-bus seq this fire published, when available */
+    recognitionSeq: int("recognition_seq"),
+    triggeredAt: dt("triggered_at").notNull(),
+    createdAt: dt("created_at").notNull(),
+  },
+  (t) => ({
+    dedupeUq: unique("milestone_triggers_dedupe_uq").on(t.dedupeKey),
+    milestoneIdx: index("milestone_triggers_milestone_idx").on(t.milestoneId, t.triggeredAt),
+  }),
+);
+
+/* ------------------------------------------------------------------ *
+ *  39 · LEAD SUPPORTING DOCUMENTS (Admin/Lead UAT)                    *
+ *                                                                    *
+ *  OPTIONAL files an Agent or Closer attaches to a lead. Bytes are    *
+ *  stored PRIVATELY (outside any public/static dir) and served only   *
+ *  through a session-authenticated, lead-access-checked download.     *
+ *  FK is ON DELETE CASCADE so an Admin hard-delete of the lead        *
+ *  removes the document rows too (the files are unlinked by the       *
+ *  service before the row delete).                                    */
+export const LEAD_DOCUMENT_MIMES = [
+  "application/pdf",
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+] as const;
+
+export const leadDocuments = mysqlTable(
+  "lead_documents",
+  {
+    id: int("id", { unsigned: true }).autoincrement().primaryKey(),
+    leadId: int("lead_id", { unsigned: true })
+      .notNull()
+      .references(() => leads.id, { onDelete: "cascade", onUpdate: "cascade" }),
+    /** path-safe display name (no directories, single dot) */
+    fileName: varchar("file_name", { length: 160 }).notNull(),
+    mime: mysqlEnum("mime", LEAD_DOCUMENT_MIMES).notNull(),
+    sizeBytes: int("size_bytes", { unsigned: true }).notNull(),
+    /** server-generated private storage key (never a URL) */
+    storageKey: varchar("storage_key", { length: 255 }).notNull(),
+    uploadedByUserId: int("uploaded_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    uploadedByRole: varchar("uploaded_by_role", { length: 16 }),
+    createdAt: dt("created_at").notNull(),
+  },
+  (t) => ({
+    leadIdx: index("lead_documents_lead_idx").on(t.leadId),
+  }),
+);
+
+/* ------------------------------------------------------------------ *
+ *  40 · FOLLOW-UP REASSIGNMENT TRAIL (Admin assignment-rule fix)      *
+ *                                                                    *
+ *  One immutable row per Admin follow-up reassignment. Keeps the      *
+ *  follow-up's own history trail complete: previous owner, who        *
+ *  reassigned it, new owner, timestamp, reason. Lead ownership is a   *
+ *  SEPARATE concept and is never recorded here.                       */
+export const followUpReassignments = mysqlTable(
+  "follow_up_reassignments",
+  {
+    id: int("id", { unsigned: true }).autoincrement().primaryKey(),
+    followUpId: int("follow_up_id", { unsigned: true })
+      .notNull()
+      .references(() => followUps.id, { onDelete: "cascade", onUpdate: "cascade" }),
+    /** business code, retained even if the follow-up row is later removed */
+    followUpCode: varchar("follow_up_code", { length: 32 }).notNull(),
+    fromOwnerUserId: int("from_owner_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    fromOwnerRole: varchar("from_owner_role", { length: 16 }),
+    toOwnerUserId: int("to_owner_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    toOwnerRole: varchar("to_owner_role", { length: 16 }),
+    reassignedByUserId: int("reassigned_by_user_id", { unsigned: true }).references(
+      () => users.id,
+      {
+        onDelete: "set null",
+        onUpdate: "cascade",
+      },
+    ),
+    reason: varchar("reason", { length: 500 }),
+    createdAt: dt("created_at").notNull(),
+  },
+  (t) => ({
+    followUpIdx: index("follow_up_reassignments_fu_idx").on(t.followUpId, t.createdAt),
+  }),
+);
+
+/* ------------------------------------------------------------------ *
+ *  HR Policy — simple company-policy publishing (Admin UAT).         *
+ *  HR/Admin author + publish; Agents/Closers read PUBLISHED only.    *
+ *  Deliberately minimal: title + content + effective date + status.  *
+ * ------------------------------------------------------------------ */
+export const HR_POLICY_STATUSES = ["DRAFT", "PUBLISHED"] as const;
+
+export const hrPolicies = mysqlTable(
+  "hr_policies",
+  {
+    id: int("id", { unsigned: true }).autoincrement().primaryKey(),
+    title: varchar("title", { length: 200 }).notNull(),
+    content: mediumtext("content").notNull(),
+    /** the date the policy takes effect (plain calendar date) */
+    effectiveDate: dcol("effective_date"),
+    status: mysqlEnum("status", HR_POLICY_STATUSES).notNull().default("DRAFT"),
+    createdByUserId: int("created_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    updatedByUserId: int("updated_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    publishedByUserId: int("published_by_user_id", { unsigned: true }).references(() => users.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    publishedAt: dt("published_at"),
+    createdAt: dt("created_at").notNull(),
+    updatedAt: dt("updated_at").notNull(),
+  },
+  (t) => ({
+    statusIdx: index("hr_policies_status_idx").on(t.status, t.effectiveDate),
+  }),
+);
 
 /* ------------------------------------------------------------------ *
  *  Relations (typed joins for Drizzle query API)                     *
@@ -1926,6 +2642,8 @@ export type OfficeNetwork = typeof officeNetworks.$inferSelect;
 export type NewOfficeNetwork = typeof officeNetworks.$inferInsert;
 export type Attendance = typeof attendance.$inferSelect;
 export type NewAttendance = typeof attendance.$inferInsert;
+export type ShiftOverride = typeof shiftOverrides.$inferSelect;
+export type NewShiftOverride = typeof shiftOverrides.$inferInsert;
 export type LeaveRequest = typeof leaveRequests.$inferSelect;
 export type NewLeaveRequest = typeof leaveRequests.$inferInsert;
 export type LeaveDay = typeof leaveDays.$inferSelect;
@@ -1960,6 +2678,12 @@ export type GamificationUserAchievement = typeof gamificationUserAchievements.$i
 export type NewGamificationUserAchievement = typeof gamificationUserAchievements.$inferInsert;
 export type GamificationStreak = typeof gamificationStreaks.$inferSelect;
 export type NewGamificationStreak = typeof gamificationStreaks.$inferInsert;
+export type ScoringRule = typeof scoringRules.$inferSelect;
+export type NewScoringRule = typeof scoringRules.$inferInsert;
+export type ScoringRuleVersion = typeof scoringRuleVersions.$inferSelect;
+export type NewScoringRuleVersion = typeof scoringRuleVersions.$inferInsert;
+export type ScoringRun = typeof scoringRuns.$inferSelect;
+export type NewScoringRun = typeof scoringRuns.$inferInsert;
 export type OfficeTvDisplay = typeof officeTvDisplays.$inferSelect;
 export type NewOfficeTvDisplay = typeof officeTvDisplays.$inferInsert;
 export type OfficeTvSettings = typeof officeTvSettings.$inferSelect;
@@ -1970,3 +2694,23 @@ export type OfficeTvAnnouncement = typeof officeTvAnnouncements.$inferSelect;
 export type NewOfficeTvAnnouncement = typeof officeTvAnnouncements.$inferInsert;
 export type OfficeTvEvent = typeof officeTvEvents.$inferSelect;
 export type NewOfficeTvEvent = typeof officeTvEvents.$inferInsert;
+export type CompanyProfile = typeof companyProfile.$inferSelect;
+export type NewCompanyProfile = typeof companyProfile.$inferInsert;
+export type IncentiveScheme = typeof incentiveSchemes.$inferSelect;
+export type NewIncentiveScheme = typeof incentiveSchemes.$inferInsert;
+export type IncentiveSchemeVersion = typeof incentiveSchemeVersions.$inferSelect;
+export type NewIncentiveSchemeVersion = typeof incentiveSchemeVersions.$inferInsert;
+export type IncentiveResult = typeof incentiveResults.$inferSelect;
+export type NewIncentiveResult = typeof incentiveResults.$inferInsert;
+export type CelebrationProfileRow = typeof celebrationProfiles.$inferSelect;
+export type NewCelebrationProfileRow = typeof celebrationProfiles.$inferInsert;
+export type Milestone = typeof milestones.$inferSelect;
+export type NewMilestone = typeof milestones.$inferInsert;
+export type MilestoneTrigger = typeof milestoneTriggers.$inferSelect;
+export type NewMilestoneTrigger = typeof milestoneTriggers.$inferInsert;
+export type LeadDocument = typeof leadDocuments.$inferSelect;
+export type NewLeadDocument = typeof leadDocuments.$inferInsert;
+export type FollowUpReassignment = typeof followUpReassignments.$inferSelect;
+export type NewFollowUpReassignment = typeof followUpReassignments.$inferInsert;
+export type HrPolicy = typeof hrPolicies.$inferSelect;
+export type NewHrPolicy = typeof hrPolicies.$inferInsert;

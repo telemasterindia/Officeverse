@@ -37,10 +37,10 @@ const leadAcceptedByX = { agentId: 100, assignedCloserId: 200, status: "ACCEPTED
 const leadCloserOriginated = { agentId: null, assignedCloserId: 200, status: "ASSIGNED" } as const;
 
 describe("canReadLead", () => {
-  it("admin & hr read any lead", () => {
+  it("admin reads any lead; HR has NO lead access (HR role separation)", () => {
     expect(canReadLead(admin, leadNew)).toBe(true);
     expect(canReadLead(admin, leadAssignedToX)).toBe(true);
-    expect(canReadLead(hr, leadAssignedToX)).toBe(true);
+    expect(canReadLead(hr, leadAssignedToX)).toBe(false);
   });
   it("agent reads only their own submissions (even after transfer)", () => {
     expect(canReadLead(agentA, leadNew)).toBe(true);
@@ -207,9 +207,9 @@ describe("Phase-4: closer-originated Lead (agent_id NULL) works normally for its
 });
 
 describe("leadScope (role-aware list restriction)", () => {
-  it("admin & hr → all", () => {
+  it("admin → all; HR → none (Leads is an Admin operational module)", () => {
     expect(leadScope(admin)).toEqual({ kind: "all" });
-    expect(leadScope(hr)).toEqual({ kind: "all" });
+    expect(leadScope(hr)).toEqual({ kind: "none" });
   });
   it("agent → own agentId; closer → own closerId", () => {
     expect(leadScope(agentA)).toEqual({ kind: "agent", agentId: 100 });

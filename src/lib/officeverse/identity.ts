@@ -1,23 +1,15 @@
 /**
- * Employee identity — TWO representations of the same person:
- *   - "character" → the Officeverse OfficeCharacter (illustrated identity)
- *   - "photo"     → a real uploaded photograph
- *
- * The character system is unchanged and remains the fallback. When a real photo
- * exists for a person it takes priority wherever that person's avatar chip is
- * shown (top bar, rosters, profile…). Removing the photo falls back to the
- * character.
+ * Employee identity — a real uploaded photograph, or (no photo) a professional
+ * initials chip via <PhotoDisplay>. There is no illustrated/cartoon fallback.
  *
  * PERSISTENCE: photos are stored in `localStorage` (key `officeverse.identityPhotos`)
  * as a `{ [name]: dataURL }` map, downscaled to <=512px before storing. This
- * survives reloads on the same browser. It is NOT a backend — see limitations
- * in the report (per-device only, ~5MB localStorage quota, no cross-device sync).
+ * survives reloads on the same browser. It is NOT a backend — per-device only,
+ * ~5MB localStorage quota, no cross-device sync. The authoritative profile photo
+ * is the server-backed one in `use-photo.ts`.
  */
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
 
-export type IdentityMode = "character" | "photo";
-
-const MODE_KEY = "officeverse.identityMode";
 const PHOTO_KEY = "officeverse.identityPhotos";
 
 /* -------------------------- photo store (localStorage) -------------------- */
@@ -120,30 +112,4 @@ export function fileToDownscaledDataUrl(file: File, max = 512): Promise<string> 
     };
     reader.readAsDataURL(file);
   });
-}
-
-/* -------- display-mode preference (persisted, like theme) -------- */
-
-export function useIdentityMode(fallback: IdentityMode = "character") {
-  const [mode, setModeState] = useState<IdentityMode>(fallback);
-
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem(MODE_KEY);
-      if (stored === "character" || stored === "photo") setModeState(stored);
-    } catch {
-      /* ignore */
-    }
-  }, []);
-
-  const setMode = useCallback((m: IdentityMode) => {
-    setModeState(m);
-    try {
-      localStorage.setItem(MODE_KEY, m);
-    } catch {
-      /* ignore */
-    }
-  }, []);
-
-  return [mode, setMode] as const;
 }

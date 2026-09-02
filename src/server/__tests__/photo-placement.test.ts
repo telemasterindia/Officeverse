@@ -75,6 +75,41 @@ describe("Phase 19 — photo + effects: placement & trust boundary", () => {
     expect(disp).toMatch(/src=\{src \?\? undefined\}/);
   });
 
+  it("Phase 24 fix — the new photo id comes from $returningId, never .insertId (drizzle mysql2 quirk)", () => {
+    const svc = read("server/hr/photo-service.ts");
+    // the write path
+    expect(svc).toMatch(/\.\$returningId\(\)/);
+    expect(svc).toMatch(/const newId = Number\(inserted\[0\]\?\.id \?\? 0\)/);
+    expect(svc).toMatch(/photo_persist_failed/); // guard when the id is 0
+    // it must NOT set photoAssetId from a bare `.insertId` read anymore
+    expect(svc).not.toMatch(/photoAssetId: Number\(\(res as/);
+    expect(svc).not.toMatch(/\{ insertId\?: number \| string \}\)\.insertId/);
+  });
+
+  it("Phase 24 fix — currentPhotoRow self-heals a missing / stale photo_asset_id", () => {
+    const svc = read("server/hr/photo-service.ts");
+    // falls back to the user's latest staff_photos row by user_id
+    expect(svc).toMatch(/\.where\(eq\(staffPhotos\.userId, userId\)\)/);
+    expect(svc).toMatch(/\.orderBy\(desc\(staffPhotos\.id\)\)/);
+  });
+
+  it("Phase 24 fix — set/remove enforce one-photo-per-user (drop every other row)", () => {
+    const svc = read("server/hr/photo-service.ts");
+    expect(svc).toMatch(
+      /from\(staffPhotos\)\s*\n\s*\.where\(eq\(staffPhotos\.userId, targetUserId\)\)/,
+    );
+    expect(svc).toMatch(/if \(s\.id === newId\) continue;/);
+  });
+
+  it("the shell-header identity prefers the canonical server photo (no 2nd photo system)", () => {
+    const shell = read("components/officeverse/app-shell.tsx");
+    expect(shell).toMatch(/useProfilePhoto\(\)/);
+    expect(shell).toMatch(/serverPhoto \?\? localPhoto/);
+    // feeds the canonical <PhotoDisplay> src — no cartoon avatar, no new component
+    expect(shell).toMatch(/<PhotoDisplay\b/);
+    expect(shell).not.toMatch(/PhotoUploadField|new avatar|AvatarV2|AvatarDisplay/);
+  });
+
   it("celebration overlay respects reduced motion and plays no sound in Phase 19", () => {
     const raw = read("components/officeverse/photo/CelebrationOverlay.tsx");
     const co = strip(raw);

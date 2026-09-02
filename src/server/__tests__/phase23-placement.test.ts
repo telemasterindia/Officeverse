@@ -111,9 +111,10 @@ describe("Phase 23 — office-network management is isolated + HR/Admin only", (
     expect(svc).toMatch(/would_lock_out/);
     expect(svc).toMatch(/confirmLockout/);
   });
-  it("the management route is gated to admin | hr", () => {
+  it("the management route is gated to ADMIN ONLY (Admin UAT §11)", () => {
     const route = read("routes/_shell.office-networks.tsx");
-    expect(route).toMatch(/role !== "admin" && user\?\.role !== "hr"/);
+    expect(route).toMatch(/user\?\.role !== "admin"/);
+    expect(route).not.toMatch(/user\?\.role !== "hr"/);
   });
   it("no office-network / attendance-override module under src/server/api", () => {
     const api = readdirSync(join(root, "server", "api"));
@@ -135,9 +136,19 @@ describe("Phase 23 — Closer salary hard-exclusion (§15) + payroll isolation (
       expect(stripComments(read(`routes/${f}`))).not.toMatch(/salary|monthly_salary|compensation/i);
     }
   });
-  it("the client people model never seeds a non-zero Closer salary", () => {
-    const people = read("lib/officeverse/people.ts");
-    expect(people).toMatch(/kind === "agent" \? 45000 : 0/);
+  it("agent base salary at creation flows to the payroll module, never agents.monthlySalary", () => {
+    // Admin UAT Batch-2 §3 REVERSED the Phase-23 "no salary at creation" rule
+    // for AGENTS: createStaff now accepts an optional base_salary and writes it
+    // to `salary_profiles` via setSalaryProfile (effective from the join date).
+    // The legacy `agents.monthly_salary` column is still never written, and a
+    // Closer is explicitly rejected (a Closer works on incentives).
+    const staffFns = read("lib/officeverse/staff-fns.ts");
+    const staffSvc = read("server/staff/service.ts");
+    for (const src of [staffFns, staffSvc]) {
+      expect(stripComments(src)).not.toMatch(/monthly_salary|monthlySalary|compensation|\bwage\b/i);
+    }
+    expect(staffSvc).toMatch(/setSalaryProfile/);
+    expect(stripComments(staffSvc)).toMatch(/applies to agents only/i);
   });
   it("attendance / assignment / office-network fns never carry a salary field", () => {
     for (const f of [

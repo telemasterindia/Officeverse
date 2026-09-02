@@ -7,15 +7,16 @@ import {
   OVERRIDE_CLASSES,
 } from "../authz/attendance";
 
-describe("office-network management — HR / Admin only", () => {
-  it("HR and Admin may manage; Agent and Closer may not", () => {
+describe("office-network management — ADMIN ONLY (Admin UAT §11)", () => {
+  it("only Admin may manage; Agent, Closer and HR may not", () => {
     expect(canManageOfficeNetworks("admin")).toBe(true);
-    expect(canManageOfficeNetworks("hr")).toBe(true);
+    expect(canManageOfficeNetworks("hr")).toBe(false);
     expect(canManageOfficeNetworks("agent")).toBe(false);
     expect(canManageOfficeNetworks("closer")).toBe(false);
-    expect(() => assertCanManageOfficeNetworks("agent")).toThrow(/Admin|HR/i);
-    expect(() => assertCanManageOfficeNetworks("closer")).toThrow(/Admin|HR/i);
-    expect(() => assertCanManageOfficeNetworks("hr")).not.toThrow();
+    expect(() => assertCanManageOfficeNetworks("agent")).toThrow(/Admin/i);
+    expect(() => assertCanManageOfficeNetworks("closer")).toThrow(/Admin/i);
+    expect(() => assertCanManageOfficeNetworks("hr")).toThrow(/Admin/i);
+    expect(() => assertCanManageOfficeNetworks("admin")).not.toThrow();
   });
 });
 

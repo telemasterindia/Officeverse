@@ -17,6 +17,7 @@ import {
   touchLogin,
   type PublicUser,
 } from "../db/repos/users";
+import { employeeCodeForUser } from "../db/repos/staff";
 import { createSession, revokeAllForUser, revokeSession } from "../session";
 import { listActiveNetworks } from "../db/repos/office-networks";
 import { matchOfficeNetwork, normalizeIp } from "../net/cidr";
@@ -131,6 +132,7 @@ export async function login(
     attendanceEligible: access.attendanceEligible,
   });
   const photoUrl = await getUserPhotoUrl(user);
+  const employeeCode = await employeeCodeForUser(user.id, user.role);
 
   await recordAudit({
     actorUserId: user.id,
@@ -144,7 +146,7 @@ export async function login(
 
   return {
     ok: true,
-    user: toPublicUser(user, photoUrl),
+    user: toPublicUser(user, photoUrl, employeeCode),
     token,
     expiresAt,
     attendanceEligible: access.attendanceEligible,
@@ -167,7 +169,11 @@ export async function logout(token: string | undefined, actor?: User): Promise<v
 }
 
 export async function currentPublicUser(user: User): Promise<PublicUser> {
-  return toPublicUser(user, await getUserPhotoUrl(user));
+  const [photoUrl, employeeCode] = await Promise.all([
+    getUserPhotoUrl(user),
+    employeeCodeForUser(user.id, user.role),
+  ]);
+  return toPublicUser(user, photoUrl, employeeCode);
 }
 
 /** Self-service password change. */

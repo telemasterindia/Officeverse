@@ -4,12 +4,17 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState, PageHeader, SectionCard } from "@/components/officeverse/primitives";
+import { StaffAvatar } from "@/components/officeverse/staff-avatar";
+import { ProcessFilter, type ProcessFilterValue } from "@/components/officeverse/process-filter";
 import {
   useAddAdjustment,
   useAdminOvertime,
   useAdminPayroll,
   useApprovePayroll,
+  useAttendanceRegister,
+  useCalculateAllPayroll,
   useCalculatePayroll,
+  useConsolidatedPayroll,
   useDecideOvertime,
   useEmploymentPeriods,
   useLockPayroll,
@@ -67,6 +72,52 @@ function inr(v: string | number): string {
   return `₹${n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+/** ProcessFilter pill value → the server's `users.process` filter (ALL = none). */
+function filterToProcess(v: ProcessFilterValue): ProcessCode | undefined {
+  return v === "ALL" ? undefined : (v as ProcessCode);
+}
+
+/** Full canonical Employee ID — Agent `TMI_CC_###` or Closer `TMI_CL_###`.
+ *  Mirrors the server (payroll-fns) validator; a bare `010` is rejected. */
+const EMPLOYEE_ID_RE = /^(TMI_CC_\d{3,}|TMI_CL_\d{3,})$/;
+
+const ROLE_LABEL: Record<string, string> = { agent: "Sales Agent", closer: "Closer" };
+
+/**
+ * Photo + name (+ optional role subtitle). The canonical Employee ID lives in
+ * its OWN dedicated column, never combined with process text here — so the ID is
+ * shown unambiguously and is never confused with an internal numeric id.
+ */
+function EmployeeCell({
+  userId,
+  name,
+  subtitle,
+  process,
+  photoAvailable,
+}: {
+  userId?: number | null | undefined;
+  name: string;
+  subtitle?: string | null | undefined;
+  process?: string | null | undefined;
+  photoAvailable?: boolean | undefined;
+}) {
+  return (
+    <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-2">
+      <StaffAvatar
+        userId={userId ?? null}
+        name={name}
+        hasPhoto={photoAvailable ?? false}
+        size="small"
+        process={(process ?? undefined) as never}
+      />
+      <div className="min-w-0">
+        <p className="truncate font-medium">{name}</p>
+        {subtitle ? <p className="truncate text-[11px] text-muted-foreground">{subtitle}</p> : null}
+      </div>
+    </div>
+  );
+}
+
 function PayrollPage() {
   const { user } = useSession();
   const isManager = user?.role === "admin" || user?.role === "hr";
@@ -83,6 +134,8 @@ function PayrollPage() {
       <PolicyCard />
       {isManager ? (
         <>
+          <ConsolidatedPayrollSection />
+          <AttendanceRegisterSection />
           <SalaryProfiles />
           <CalculateForm />
           <ManagerPayroll />
@@ -111,21 +164,378 @@ function PolicyCard() {
   );
 }
 
+/* ============ Excel-ready client CSV (no server Data Export) ============= */
+
+function downloadCsv(filename: string, rows: (string | number)[][]) {
+  const esc = (v: string | number) => {
+    const s = String(v ?? "");
+    return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const csv = rows.map((r) => r.map(esc).join(",")).join("\r\n");
+  const url = URL.createObjectURL(new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+const DAY_CODE_CLASS: Record<string, string> = {
+  P: "text-success",
+  L: "text-warning",
+  AB: "text-destructive",
+  HD: "text-accent",
+};
+
+/* ============ Monthly daily attendance register ============ */
+
+function AttendanceRegisterSection() {
+  const [month, setMonth] = useState(thisMonth());
+  const [proc, setProc] = useState<ProcessFilterValue>("ALL");
+  const [q, setQ] = useState("");
+  const query = { month, ...(filterToProcess(proc) ? { process: filterToProcess(proc)! } : {}), q };
+  const reg = useAttendanceRegister(query);
+  const data = reg.data;
+  const dayNums = Array.from({ length: data?.days ?? 30 }, (_, i) => i + 1);
+
+  const exportCsv = () => {
+    if (!data) return;
+    const header = [
+      "Employee",
+      "Employee ID",
+      "Process",
+      ...dayNums.map(String),
+      "Present",
+      "Late",
+      "Half Day",
+      "Absent",
+      "Leave",
+      "Late Units",
+    ];
+    const body = data.rows.map((r) => [
+      r.name,
+      r.employeeCode,
+      r.process,
+      ...dayNums.map((d) => r.days[d] ?? ""),
+      r.summary.present,
+      r.summary.late,
+      r.summary.halfDay,
+      r.summary.absent,
+      r.summary.leave,
+      r.summary.lateUnits,
+    ]);
+    downloadCsv(`attendance-register-${month}.csv`, [header, ...body]);
+  };
+
+  return (
+    <SectionCard
+      title="Monthly daily attendance register"
+      description="One row per active employee, one column per calendar day. P = Present · L = Late · AB = Absent · HD = Half Day. Sourced from the same attendance records payroll uses."
+    >
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <input
+          type="month"
+          className="rounded-lg border border-border bg-card px-2 py-1.5 text-sm"
+          value={month}
+          onChange={(e) => setMonth(e.target.value)}
+          aria-label="Month"
+        />
+        <input
+          className="rounded-lg border border-border bg-card px-2 py-1.5 text-sm"
+          placeholder="Search employee"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
+        <ProcessFilter value={proc} onChange={setProc} label="Filter attendance by process" />
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 rounded-full text-xs"
+          disabled={!data || data.rows.length === 0}
+          onClick={exportCsv}
+        >
+          Export CSV
+        </Button>
+      </div>
+
+      {reg.isLoading ? (
+        <Msg>Loading…</Msg>
+      ) : data?.dbUnavailable ? (
+        <EmptyState emoji="🗄️" title="Database not connected" message="Attendance needs the DB." />
+      ) : !data || data.rows.length === 0 ? (
+        <EmptyState
+          emoji="🗓️"
+          title="No employees"
+          message="No active employees match the filter."
+        />
+      ) : (
+        <div className="overflow-x-auto rounded-lg border border-border">
+          <table className="w-full text-xs">
+            <thead className="bg-secondary/60 text-left uppercase">
+              <tr>
+                <th className="sticky left-0 z-10 bg-secondary/60 px-3 py-2">Employee</th>
+                <th className="px-2 py-2">Employee ID</th>
+                <th className="px-2 py-2">Process</th>
+                {dayNums.map((d) => (
+                  <th key={d} className="px-1.5 py-2 text-center font-mono">
+                    {d}
+                  </th>
+                ))}
+                <th className="px-2 py-2 text-center">P</th>
+                <th className="px-2 py-2 text-center">L</th>
+                <th className="px-2 py-2 text-center">HD</th>
+                <th className="px-2 py-2 text-center">AB</th>
+                <th className="px-2 py-2 text-center">Leave</th>
+                <th className="px-2 py-2 text-center">Late units</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.rows.map((r) => (
+                <tr key={r.userId} className="border-t border-border/60">
+                  <td className="sticky left-0 z-10 bg-card px-3 py-1.5">
+                    <EmployeeCell
+                      userId={r.userId}
+                      name={r.name}
+                      subtitle={ROLE_LABEL[r.role] ?? r.role}
+                      process={r.process}
+                      photoAvailable={r.photoAvailable}
+                    />
+                  </td>
+                  <td className="px-2 py-1.5 font-mono">{r.employeeCode}</td>
+                  <td className="px-2 py-1.5 text-muted-foreground">{r.process}</td>
+                  {dayNums.map((d) => {
+                    const c = r.days[d] ?? "";
+                    return (
+                      <td
+                        key={d}
+                        className={cn(
+                          "px-1.5 py-1.5 text-center font-semibold",
+                          DAY_CODE_CLASS[c] ?? "text-muted-foreground",
+                        )}
+                      >
+                        {c || "·"}
+                      </td>
+                    );
+                  })}
+                  <td className="px-2 py-1.5 text-center font-semibold">{r.summary.present}</td>
+                  <td className="px-2 py-1.5 text-center">{r.summary.late}</td>
+                  <td className="px-2 py-1.5 text-center">{r.summary.halfDay}</td>
+                  <td className="px-2 py-1.5 text-center">{r.summary.absent}</td>
+                  <td className="px-2 py-1.5 text-center">{r.summary.leave}</td>
+                  <td className="px-2 py-1.5 text-center">{r.summary.lateUnits}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </SectionCard>
+  );
+}
+
+/* ============ Consolidated payroll (all employees, auto-calculated) ============ */
+
+function ConsolidatedPayrollSection() {
+  const [month, setMonth] = useState(thisMonth());
+  const [proc, setProc] = useState<ProcessFilterValue>("ALL");
+  const [q, setQ] = useState("");
+  const query = { month, ...(filterToProcess(proc) ? { process: filterToProcess(proc)! } : {}), q };
+  const cp = useConsolidatedPayroll(query);
+  const calcAll = useCalculateAllPayroll();
+  const data = cp.data;
+
+  const runCalcAll = () =>
+    calcAll.mutate(query, {
+      onSuccess: (r) =>
+        toast.success(
+          `Calculated ${r.calculated} · skipped ${r.skipped} (approved/locked)` +
+            (r.failed ? ` · ${r.failed} failed` : ""),
+        ),
+      onError: (err) => toast.error(err.message || "Calculate all failed"),
+    });
+
+  const exportCsv = () => {
+    if (!data) return;
+    const header = [
+      "Employee",
+      "Employee ID",
+      "Process",
+      "Base salary",
+      "Present days",
+      "Half days",
+      "Late count",
+      "Late units",
+      "Absent days",
+      "Leave days",
+      "Leave deduction",
+      "Regularity bonus",
+      "Late deduction",
+      "Off deduction",
+      "Adjustments",
+      "Overtime",
+      "Final calculated salary",
+      "Payroll status",
+    ];
+    const body = data.rows.map((r) => [
+      r.name,
+      r.employeeCode,
+      r.process,
+      r.baseSalary,
+      r.presentDays,
+      r.halfDays,
+      r.lateCount,
+      r.lateUnits,
+      r.absentDays,
+      r.leaveCount,
+      r.leaveDeduction,
+      r.regularityBonus,
+      r.lateDeduction,
+      r.offDeduction,
+      r.adjustmentsTotal,
+      r.overtimeAmount,
+      r.finalCalculatedSalary,
+      r.payrollStatus,
+    ]);
+    downloadCsv(`payroll-consolidated-${month}.csv`, [header, ...body]);
+  };
+
+  return (
+    <SectionCard
+      title="Consolidated payroll (all employees)"
+      description="Every active employee's calculated salary for the month, on one page. Rows with a saved run show its real status; the rest are live DRAFT previews from the same engine. Approved / Locked runs are never recalculated here."
+    >
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <input
+          type="month"
+          className="rounded-lg border border-border bg-card px-2 py-1.5 text-sm"
+          value={month}
+          onChange={(e) => setMonth(e.target.value)}
+          aria-label="Month"
+        />
+        <input
+          className="rounded-lg border border-border bg-card px-2 py-1.5 text-sm"
+          placeholder="Search employee"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
+        <ProcessFilter value={proc} onChange={setProc} label="Filter payroll by process" />
+        <Button
+          size="sm"
+          className="h-7 rounded-full text-xs"
+          disabled={calcAll.isPending}
+          onClick={runCalcAll}
+        >
+          {calcAll.isPending ? "Calculating…" : "Calculate & save all"}
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 rounded-full text-xs"
+          disabled={!data || data.rows.length === 0}
+          onClick={exportCsv}
+        >
+          Export CSV
+        </Button>
+      </div>
+
+      {cp.isLoading ? (
+        <Msg>Loading…</Msg>
+      ) : data?.dbUnavailable ? (
+        <EmptyState emoji="🗄️" title="Database not connected" message="Payroll needs the DB." />
+      ) : !data || data.rows.length === 0 ? (
+        <EmptyState
+          emoji="🧾"
+          title="No employees"
+          message="No active employees match the filter."
+        />
+      ) : (
+        <div className="overflow-x-auto rounded-lg border border-border">
+          <table className="w-full text-xs">
+            <thead className="bg-secondary/60 text-left uppercase">
+              <tr>
+                <th className="px-3 py-2">Employee</th>
+                <th className="px-2 py-2">Employee ID</th>
+                <th className="px-2 py-2">Process</th>
+                <th className="px-2 py-2">Base salary</th>
+                <th className="px-2 py-2 text-center">Present</th>
+                <th className="px-2 py-2 text-center">HD</th>
+                <th className="px-2 py-2 text-center">Late</th>
+                <th className="px-2 py-2 text-center">Late units</th>
+                <th className="px-2 py-2 text-center">Absent</th>
+                <th className="px-2 py-2 text-center">Leave</th>
+                <th className="px-2 py-2">Leave ded.</th>
+                <th className="px-2 py-2">Reg. bonus</th>
+                <th className="px-2 py-2">Late ded.</th>
+                <th className="px-2 py-2">Other adj.</th>
+                <th className="px-2 py-2">Final salary</th>
+                <th className="px-2 py-2">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.rows.map((r) => (
+                <tr key={r.userId} className="border-t border-border/60">
+                  <td className="px-3 py-1.5">
+                    <EmployeeCell
+                      userId={r.userId}
+                      name={r.name}
+                      subtitle={ROLE_LABEL[r.role] ?? r.role}
+                      process={r.process}
+                      photoAvailable={r.photoAvailable}
+                    />
+                  </td>
+                  <td className="px-2 py-1.5 font-mono">{r.employeeCode}</td>
+                  <td className="px-2 py-1.5 text-muted-foreground">{r.process}</td>
+                  <td className="px-2 py-1.5">{inr(r.baseSalary)}</td>
+                  <td className="px-2 py-1.5 text-center font-semibold">{r.presentDays}</td>
+                  <td className="px-2 py-1.5 text-center">{r.halfDays}</td>
+                  <td className="px-2 py-1.5 text-center">{r.lateCount}</td>
+                  <td className="px-2 py-1.5 text-center">{r.lateUnits}</td>
+                  <td className="px-2 py-1.5 text-center">{r.absentDays}</td>
+                  <td className="px-2 py-1.5 text-center">{r.leaveCount}</td>
+                  <td className="px-2 py-1.5">{inr(r.leaveDeduction)}</td>
+                  <td className="px-2 py-1.5">₹{r.regularityBonus}</td>
+                  <td className="px-2 py-1.5">{inr(r.lateDeduction)}</td>
+                  <td className="px-2 py-1.5">{inr(r.adjustmentsTotal)}</td>
+                  <td className="px-2 py-1.5 font-semibold">{inr(r.finalCalculatedSalary)}</td>
+                  <td
+                    className={cn(
+                      "px-2 py-1.5 font-semibold",
+                      STATUS_CLASS[r.payrollStatus] ?? "text-muted-foreground",
+                    )}
+                  >
+                    {r.payrollStatus}
+                    {!r.persisted ? (
+                      <span className="ml-1 text-[10px] uppercase text-muted-foreground">
+                        (preview)
+                      </span>
+                    ) : null}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </SectionCard>
+  );
+}
+
 /* ========================= salary profiles ===================== */
 
 function SalaryProfiles() {
   const [employee, setEmployee] = useState("");
-  const q = useSalaryProfiles(employee || undefined);
+  const [proc, setProc] = useState<ProcessFilterValue>("ALL");
+  const q = useSalaryProfiles(employee || undefined, filterToProcess(proc));
   const rows = q.data?.rows ?? [];
   const save = useSetSalaryProfile();
 
-  const [form, setForm] = useState({ userId: "", baseSalary: "", effectiveFrom: "", note: "" });
+  const [form, setForm] = useState({ employeeId: "", baseSalary: "", effectiveFrom: "", note: "" });
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    const uid = Number(form.userId);
+    const id = form.employeeId.trim();
     const base = Number(form.baseSalary);
-    if (!Number.isInteger(uid) || uid <= 0) {
-      toast.error("Enter a valid employee user ID");
+    if (!EMPLOYEE_ID_RE.test(id)) {
+      toast.error("Enter a full Employee ID, e.g. TMI_CC_010 (Agent) or TMI_CL_010 (Closer)");
       return;
     }
     if (!Number.isFinite(base) || base < 0) {
@@ -138,7 +548,7 @@ function SalaryProfiles() {
     }
     save.mutate(
       {
-        userId: uid,
+        employeeId: id,
         baseSalary: base,
         effectiveFrom: form.effectiveFrom,
         ...(form.note ? { note: form.note } : {}),
@@ -146,7 +556,7 @@ function SalaryProfiles() {
       {
         onSuccess: () => {
           toast.success("Salary profile saved");
-          setForm({ userId: "", baseSalary: "", effectiveFrom: "", note: "" });
+          setForm({ employeeId: "", baseSalary: "", effectiveFrom: "", note: "" });
         },
         onError: (err) => toast.error(err.message || "Could not save"),
       },
@@ -157,12 +567,14 @@ function SalaryProfiles() {
     <SectionCard title="Base salary configuration (effective-dated)">
       <form onSubmit={submit} className="mb-4 grid gap-3 sm:grid-cols-4">
         <label className="text-sm">
-          <span className="mb-1 block font-semibold">Employee user ID</span>
+          <span className="mb-1 block font-semibold">Employee ID</span>
           <input
             className="w-full rounded-lg border border-border bg-card px-2 py-1.5"
-            value={form.userId}
-            onChange={(e) => setForm({ ...form, userId: e.target.value.replace(/\D/g, "") })}
-            inputMode="numeric"
+            value={form.employeeId}
+            onChange={(e) => setForm({ ...form, employeeId: e.target.value })}
+            placeholder="TMI_CC_010"
+            autoCapitalize="characters"
+            spellCheck={false}
             required
           />
         </label>
@@ -206,13 +618,14 @@ function SalaryProfiles() {
         </div>
       </form>
 
-      <div className="mb-2">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
         <input
           placeholder="Filter by employee"
           className="rounded-lg border border-border bg-card px-2 py-1.5 text-sm"
           value={employee}
           onChange={(e) => setEmployee(e.target.value)}
         />
+        <ProcessFilter value={proc} onChange={setProc} label="Filter salary profiles by process" />
       </div>
 
       {q.isLoading ? (
@@ -231,6 +644,7 @@ function SalaryProfiles() {
             <thead className="bg-secondary/60 text-left text-xs uppercase">
               <tr>
                 <th className="px-3 py-2">Employee</th>
+                <th className="px-3 py-2">Employee ID</th>
                 <th className="px-3 py-2">Process</th>
                 <th className="px-3 py-2">Base salary</th>
                 <th className="px-3 py-2">Effective from</th>
@@ -244,7 +658,18 @@ function SalaryProfiles() {
                   key={p.id}
                   className={cn("border-t border-border/60", !p.active && "opacity-50")}
                 >
-                  <td className="px-3 py-2 font-medium">{p.employeeName ?? "—"}</td>
+                  <td className="px-3 py-2">
+                    <EmployeeCell
+                      userId={p.userId}
+                      name={p.employeeName ?? "—"}
+                      subtitle={
+                        p.employeeRole ? (ROLE_LABEL[p.employeeRole] ?? p.employeeRole) : null
+                      }
+                      process={p.process}
+                      photoAvailable={p.photoAvailable}
+                    />
+                  </td>
+                  <td className="px-3 py-2 font-mono text-xs">{p.employeeCode ?? "—"}</td>
                   <td className="px-3 py-2 text-muted-foreground">{p.process ?? "—"}</td>
                   <td className="px-3 py-2 font-semibold">{inr(p.baseSalary)}</td>
                   <td className="px-3 py-2 text-muted-foreground">{p.effectiveFrom}</td>
@@ -264,12 +689,12 @@ function SalaryProfiles() {
 
 function CalculateForm() {
   const calc = useCalculatePayroll();
-  const [form, setForm] = useState({ userId: "", month: thisMonth() });
+  const [form, setForm] = useState({ employeeId: "", month: thisMonth() });
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    const uid = Number(form.userId);
-    if (!Number.isInteger(uid) || uid <= 0) {
-      toast.error("Enter a valid employee user ID");
+    const id = form.employeeId.trim();
+    if (!EMPLOYEE_ID_RE.test(id)) {
+      toast.error("Enter a full Employee ID, e.g. TMI_CC_010 (Agent) or TMI_CL_010 (Closer)");
       return;
     }
     if (!/^\d{4}-\d{2}$/.test(form.month)) {
@@ -277,7 +702,7 @@ function CalculateForm() {
       return;
     }
     calc.mutate(
-      { userId: uid, month: form.month },
+      { employeeId: id, month: form.month },
       {
         onSuccess: (r) =>
           toast.success(
@@ -293,12 +718,14 @@ function CalculateForm() {
     <SectionCard title="Calculate monthly payroll">
       <form onSubmit={submit} className="grid gap-3 sm:grid-cols-3">
         <label className="text-sm">
-          <span className="mb-1 block font-semibold">Employee user ID</span>
+          <span className="mb-1 block font-semibold">Employee ID</span>
           <input
             className="w-full rounded-lg border border-border bg-card px-2 py-1.5"
-            value={form.userId}
-            onChange={(e) => setForm({ ...form, userId: e.target.value.replace(/\D/g, "") })}
-            inputMode="numeric"
+            value={form.employeeId}
+            onChange={(e) => setForm({ ...form, employeeId: e.target.value })}
+            placeholder="TMI_CC_010"
+            autoCapitalize="characters"
+            spellCheck={false}
             required
           />
         </label>
@@ -386,23 +813,17 @@ function ManagerPayroll() {
             placeholder="name or email"
           />
         </label>
-        <label className="text-sm">
+        <div className="text-sm">
           <span className="mb-1 block text-xs font-semibold uppercase text-muted-foreground">
             Process
           </span>
-          <select
-            className="rounded-lg border border-border bg-card px-2 py-1.5 text-sm"
-            value={filters.process ?? ""}
-            onChange={(e) => set("process", e.target.value)}
-          >
-            <option value="">Any</option>
-            {PROCESSES.map((p) => (
-              <option key={p} value={p}>
-                {p}
-              </option>
-            ))}
-          </select>
-        </label>
+          <ProcessFilter
+            value={(filters.process ?? "ALL") as ProcessFilterValue}
+            onChange={(v) => set("process", v === "ALL" ? "" : v)}
+            label="Filter payroll by process"
+            className="justify-start"
+          />
+        </div>
         <label className="text-sm">
           <span className="mb-1 block text-xs font-semibold uppercase text-muted-foreground">
             Status
@@ -533,13 +954,21 @@ function ManagerPayroll() {
                     </td>
                     <td className="px-3 py-2">
                       <span className="flex flex-wrap gap-1">
-                        {(r.status === "DRAFT" || r.status === "CALCULATED") && r.userId ? (
+                        {(r.status === "DRAFT" || r.status === "CALCULATED") && r.employeeCode ? (
                           <Button
                             size="sm"
                             variant="ghost"
                             className="rounded-lg"
                             disabled={calc.isPending}
-                            onClick={() => act(calc, r.userId!, r.month, "Recalculated")}
+                            onClick={() =>
+                              calc.mutate(
+                                { employeeId: r.employeeCode!, month: r.month },
+                                {
+                                  onSuccess: () => toast.success("Recalculated"),
+                                  onError: (err: Error) => toast.error(err.message || "Failed"),
+                                },
+                              )
+                            }
                           >
                             Recalculate
                           </Button>

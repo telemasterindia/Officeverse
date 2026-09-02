@@ -29,8 +29,20 @@ import {
 import { holidayAwareProvider } from "./non-working";
 import { planLeaveDays } from "./sandwich";
 import { planOffRecords } from "./off-conversion";
+import { computeLateUnits } from "./late-units";
 import { usFederalHolidays } from "./us-federal";
 import { bonusReasonText, computeRegularityBonus, type BonusResult } from "./regularity";
+
+/**
+ * Admin UAT Batch-2 §5 — the Owner replaced the "2 LATE = 1 OFF" / "3 SHORT = 1
+ * OFF" attendance→Off conversion for PAY purposes with the unified Late-Units
+ * model (see ./late-units.ts). To avoid double-counting the same late check-ins,
+ * the auto-conversion path is switched OFF here: `recomputeOff` now clears any
+ * previously-converted Off rows, and the regularity bonus consumes the
+ * Late-Units threshold instead. The pure `planOffRecords` engine + its tests are
+ * left intact (still valid maths), just no longer wired into the pipeline.
+ */
+export const LATE_TO_OFF_CONVERSION_ENABLED = false;
 import * as repo from "../db/repos/hr";
 import { addDaysYMD, nowIST } from "../time";
 import type {
@@ -98,9 +110,19 @@ export async function recomputeLeaveDays(userId: number, process: string): Promi
   }
 }
 
-/** Recompute Late→Off / Short→Off records for a user + month. Idempotent. */
+/** Recompute Late→Off / Short→Off records for a user + month. Idempotent.
+ *  Admin UAT Batch-2 §5: the conversion is disabled (see
+ *  LATE_TO_OFF_CONVERSION_ENABLED) — this now just clears any stale converted
+ *  rows so an old Off can never keep voiding a bonus under the new rule. */
 export async function recomputeOff(userId: number, month: string): Promise<void> {
   const db = getDb();
+  const now = nowIST();
+
+  if (!LATE_TO_OFF_CONVERSION_ENABLED) {
+    await repo.upsertOffRecords(userId, month, [], now, db);
+    return;
+  }
+
   const { from, to } = monthBounds(month);
   const [lateCount, shortCount] = await Promise.all([
     repo.countAttendanceStatus(userId, from, to, "LATE", db),
@@ -116,7 +138,7 @@ export async function recomputeOff(userId: number, month: string): Promise<void>
       sourceCount: r.sourceCount,
       sourceDescription: r.sourceDescription,
     })),
-    nowIST(),
+    now,
     db,
   );
 }
@@ -143,15 +165,23 @@ export async function recomputeBonus(
   await recomputeOff(userId, month);
 
   const { from, to } = monthBounds(month);
-  const [leaveDaysInMonth, offInMonth] = await Promise.all([
+  const [leaveDaysInMonth, offInMonth, lateness] = await Promise.all([
     repo.countLeaveDaysInMonth(userId, from, to, db),
     repo.countActiveOffInMonth(userId, month, db),
+    repo.countCheckInLatenessInMonth(userId, from, to, db),
   ]);
+
+  // Admin UAT Batch-2 §5 — monthly Late Units ≥ 3 independently voids the bonus.
+  const lateUnits = computeLateUnits({
+    shortLateCount: lateness.shortLate,
+    lateCount: lateness.late,
+  });
 
   const result = computeRegularityBonus({
     periodMonth: month,
     approvedLeaveDaysInMonth: leaveDaysInMonth,
     effectiveOffCountInMonth: offInMonth,
+    lateUnitsThresholdReached: lateUnits.thresholdReached,
   });
 
   const now = nowIST();
@@ -401,7 +431,11 @@ export async function myHr(user: Pick<User, "id" | "process">, month: string): P
     repo.countAttendanceStatus(user.id, from, to, "SHORT_ATTENDANCE"),
   ]);
 
-  const offPlan = planOffRecords({ periodMonth: month, lateCount, shortCount });
+  // Admin UAT Batch-2 §5 — Late/Short → Off conversion is disabled; show 0 so
+  // the employee HR page never implies a converted Off that no longer exists.
+  const offPlan = LATE_TO_OFF_CONVERSION_ENABLED
+    ? planOffRecords({ periodMonth: month, lateCount, shortCount })
+    : { lateOffCount: 0, shortOffCount: 0 };
   const inMonth = days.filter((d) => d.leaveDate >= from && d.leaveDate <= to);
 
   return {

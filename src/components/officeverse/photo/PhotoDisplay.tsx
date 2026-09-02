@@ -8,6 +8,8 @@ const SIZE: Record<string, string> = {
   xs: "h-8 w-8 text-[10px]",
   sm: "h-10 w-10 text-xs",
   md: "h-14 w-14 text-sm",
+  /** 64px — roster / "on the floor" thumbnails */
+  roster: "h-16 w-16 text-sm",
   lg: "h-20 w-20 text-lg",
   xl: "h-28 w-28 text-2xl",
   "2xl": "h-40 w-40 text-4xl",

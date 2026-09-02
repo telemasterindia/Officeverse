@@ -4,15 +4,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { PageHeader, ProcessBadge, SectionCard } from "@/components/officeverse/primitives";
+import { RoleGate } from "@/components/officeverse/role-gate";
 import { PROCESSES } from "@/lib/officeverse/data";
+import { IST_TZ_LABEL } from "@/lib/officeverse/followups";
 import { useSession } from "@/lib/officeverse/session";
 import { useSystemStatus } from "@/lib/officeverse/use-system";
 import { cn } from "@/lib/utils";
@@ -21,23 +16,26 @@ import type { ProcessCode } from "@/lib/officeverse/types";
 export const Route = createFileRoute("/_shell/settings")({
   head: () => ({
     meta: [
-      { title: "Settings — TeleMaster India" },
+      { title: "Settings — TMI Officeverse" },
       {
         name: "description",
-        content: "Configure processes, notifications, appearance and platform behaviour.",
+        content: "Platform configuration for the operations floor. Admin / HR only.",
       },
-      { property: "og:title", content: "Settings — TeleMaster India" },
-      { property: "og:description", content: "Platform configuration for the operations floor." },
     ],
   }),
-  component: SettingsPage,
+  // UAT #2: Settings is an Admin / HR screen — Agents / Closers have no access.
+  component: () => (
+    <RoleGate allow={["admin", "hr"]}>
+      <SettingsPage />
+    </RoleGate>
+  ),
 });
 
 const TOGGLES: { id: string; label: string; hint: string; on: boolean }[] = [
   {
     id: "dup",
     label: "Duplicate phone detection",
-    hint: "Warn agents before a duplicate lead is submitted.",
+    hint: "Always enforced server-side for Agents — a duplicate US phone is rejected on submit.",
     on: true,
   },
   {
@@ -132,7 +130,7 @@ function ProductionReadiness() {
 }
 
 function SettingsPage() {
-  const { user, theme, toggleTheme, setProcess } = useSession();
+  const { user, theme, toggleTheme } = useSession();
   if (!user) return null;
 
   return (
@@ -147,22 +145,17 @@ function SettingsPage() {
           <div className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="org">Organisation name</Label>
-              <Input id="org" defaultValue="TeleMaster India" />
+              <Input id="org" defaultValue="TMI Officeverse" />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="tz">Default timezone</Label>
-              <Select defaultValue="IST">
-                <SelectTrigger id="tz">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {["IST", "GMT", "EST", "AEST"].map((t) => (
-                    <SelectItem key={t} value={t}>
-                      {t}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Label>Platform timezone</Label>
+              <p className="rounded-lg bg-secondary/40 px-3 py-2 text-sm font-medium">
+                {IST_TZ_LABEL}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Officeverse runs on India Standard Time everywhere — every date, shift, follow-up
+                and reminder. This is fixed and not configurable.
+              </p>
             </div>
             <Button className="rounded-full" onClick={() => toast.success("Settings saved")}>
               Save changes
@@ -170,7 +163,7 @@ function SettingsPage() {
           </div>
         </SectionCard>
 
-        <SectionCard title="Processes" description="Active campaigns and their default process">
+        <SectionCard title="Processes" description="Active campaigns and their shift windows (IST)">
           <div className="space-y-3">
             {(Object.keys(PROCESSES) as ProcessCode[]).map((code) => (
               <div
@@ -180,14 +173,9 @@ function SettingsPage() {
                 <div className="min-w-0">
                   <ProcessBadge code={code} />
                 </div>
-                <Button
-                  size="sm"
-                  variant={user.process === code ? "default" : "outline"}
-                  className="shrink-0 rounded-full"
-                  onClick={() => setProcess(code)}
-                >
-                  {user.process === code ? "Active" : "Set active"}
-                </Button>
+                <span className="shrink-0 text-xs text-muted-foreground">
+                  {PROCESSES[code].hours}
+                </span>
               </div>
             ))}
           </div>

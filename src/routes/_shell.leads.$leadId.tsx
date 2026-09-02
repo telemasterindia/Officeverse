@@ -1,8 +1,26 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
-import { ArrowLeft, ArrowRightLeft, CalendarPlus } from "lucide-react";
-import { useMemo, useState } from "react";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import {
+  ArrowLeft,
+  ArrowRightLeft,
+  Download,
+  FileText,
+  Trash2,
+  Upload,
+  UserCheck,
+} from "lucide-react";
+import { useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   EmptyState,
   LeadIdChip,
@@ -10,12 +28,24 @@ import {
   SectionCard,
   StatusBadge,
 } from "@/components/officeverse/primitives";
-import { FollowUpScheduler } from "@/components/officeverse/follow-up-scheduler";
 import { FollowUpStatusBadge } from "@/components/officeverse/follow-up-detail";
 import { displayDateTime } from "@/lib/officeverse/followups";
-import { useFollowUps, useLeads } from "@/lib/officeverse/use-crm";
 import { useSession } from "@/lib/officeverse/session";
-import type { FollowUpRecord } from "@/lib/officeverse/followups";
+import {
+  useAssignableClosers,
+  useDeleteLeadDocument,
+  useDeleteServerLead,
+  useDownloadLeadDocument,
+  useLeadDocuments,
+  useServerFollowUps,
+  useServerLead,
+  useTransferServerLead,
+  useUploadLeadDocument,
+  LEAD_DOC_ACCEPT,
+  LEAD_DOC_MAX_BYTES,
+  type UiFollowUp,
+  type UiLead,
+} from "@/lib/officeverse/use-lead-lifecycle";
 
 export const Route = createFileRoute("/_shell/leads/$leadId")({
   head: ({ params }) => ({
@@ -33,7 +63,7 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-function FuRow({ f }: { f: FollowUpRecord }) {
+function FuRow({ f }: { f: UiFollowUp }) {
   return (
     <Link
       to="/followups/$followUpId"
@@ -56,15 +86,297 @@ function FuRow({ f }: { f: FollowUpRecord }) {
   );
 }
 
+/**
+ * Admin UAT §2 — Lead → Closer assignment. Admin-only control that assigns (or
+ * reassigns) an existing lead's closer. Uses the server `transferLead`, which
+ * enforces same-process routing, ownership history + audit; ownership then
+ * reflects immediately for the new closer everywhere (cache invalidation).
+ */
+function ReassignCloserCard({ lead }: { lead: UiLead }) {
+  // Server-authoritative: the list is already active + same-process + minus the
+  // current closer. The client filter below is defence-in-depth only.
+  const { closers } = useAssignableClosers({ leadCode: lead.lead_id });
+  const transfer = useTransferServerLead();
+  const [toCode, setToCode] = useState("");
+  const [note, setNote] = useState("");
+
+  const current = lead.assigned_closer_code;
+  const options = closers.filter(
+    (c) => c.code !== current && (!lead.process || c.process === lead.process),
+  );
+  const disabled = !toCode || transfer.isPending;
+
+  function submit() {
+    if (!toCode) return;
+    transfer.mutate(
+      { code: lead.lead_id, to_closer_code: toCode, ...(note.trim() ? { note: note.trim() } : {}) },
+      {
+        onSuccess: (r) => {
+          setToCode("");
+          setNote("");
+          toast.success(`Lead assigned to ${r.lead.assigned_closer_name ?? toCode}`);
+        },
+        onError: (e) => toast.error(e instanceof Error ? e.message : "Could not assign closer"),
+      },
+    );
+  }
+
+  return (
+    <SectionCard
+      title="Assign / reassign closer"
+      description={
+        (current
+          ? `Currently with ${lead.assigned_closer}. Ownership moves immediately.`
+          : "This lead has no closer yet.") +
+        (lead.process ? ` Only ${lead.process}-process closers are eligible.` : "")
+      }
+    >
+      <div className="space-y-3">
+        <div className="space-y-1.5">
+          <Label className="text-xs text-muted-foreground">Destination closer</Label>
+          <Select value={toCode} onValueChange={setToCode} disabled={options.length === 0}>
+            <SelectTrigger>
+              <SelectValue
+                placeholder={
+                  options.length === 0
+                    ? `No eligible ${lead.process ?? ""} closer available`
+                    : "Select a closer"
+                }
+              />
+            </SelectTrigger>
+            <SelectContent>
+              {options.map((c) => (
+                <SelectItem key={c.code} value={c.code}>
+                  {c.name} — {c.process}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1.5">
+          <Label className="text-xs text-muted-foreground">Reason (optional, audited)</Label>
+          <Input
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="e.g. Workload rebalancing"
+          />
+        </div>
+        <Button onClick={submit} disabled={disabled}>
+          <UserCheck className="mr-1.5 h-4 w-4" />
+          {transfer.isPending ? "Assigning…" : current ? "Reassign closer" : "Assign closer"}
+        </Button>
+      </div>
+    </SectionCard>
+  );
+}
+
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/**
+ * §3–§6 — Supporting documents. Anyone who can open this lead detail already
+ * passed `canReadLead`, and document access is the SAME surface
+ * (`canAccessLeadDocuments === canReadLead`), so the card renders for every
+ * viewer here; the server re-checks every upload / download / delete. No public
+ * URLs — downloads stream base64 through an authenticated server fn.
+ */
+function LeadDocumentsCard({ leadCode }: { leadCode: string }) {
+  const { documents, isLoading } = useLeadDocuments(leadCode);
+  const upload = useUploadLeadDocument();
+  const download = useDownloadLeadDocument();
+  const del = useDeleteLeadDocument(leadCode);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [pendingName, setPendingName] = useState<string | null>(null);
+
+  function choose(file: File | null) {
+    if (!file) return;
+    if (file.size > LEAD_DOC_MAX_BYTES) {
+      toast.error("That file is larger than the 10 MB limit.");
+      return;
+    }
+    setPendingName(file.name);
+    upload.mutate(
+      { lead_code: leadCode, file },
+      {
+        onSuccess: (r) => {
+          setPendingName(null);
+          toast.success(`Uploaded ${r.document.file_name}`);
+        },
+        onError: (e) => {
+          setPendingName(null);
+          toast.error(e instanceof Error ? e.message : "Upload failed");
+        },
+      },
+    );
+    if (inputRef.current) inputRef.current.value = "";
+  }
+
+  return (
+    <SectionCard
+      title="Supporting documents"
+      description="Optional files attached to this lead. Visible only to people authorised for this lead."
+    >
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="rounded-lg"
+            disabled={upload.isPending}
+            onClick={() => inputRef.current?.click()}
+          >
+            <Upload className="mr-1.5 h-4 w-4" />
+            {upload.isPending ? "Uploading…" : "Upload document"}
+          </Button>
+          {pendingName ? (
+            <span className="min-w-0 truncate text-xs text-muted-foreground">{pendingName}</span>
+          ) : (
+            <span className="text-[11px] text-muted-foreground">
+              PDF or image (PNG/JPEG/WebP), up to 10 MB
+            </span>
+          )}
+          <input
+            ref={inputRef}
+            type="file"
+            className="hidden"
+            accept={LEAD_DOC_ACCEPT}
+            onChange={(e) => choose(e.target.files?.[0] ?? null)}
+          />
+        </div>
+
+        {isLoading ? (
+          <p className="text-sm text-muted-foreground">Loading documents…</p>
+        ) : documents.length === 0 ? (
+          <p className="rounded-lg border border-dashed border-border bg-secondary/30 p-3 text-sm text-muted-foreground">
+            No documents attached.
+          </p>
+        ) : (
+          <ul className="space-y-2">
+            {documents.map((d) => (
+              <li
+                key={d.id}
+                className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-secondary/30 p-3 text-sm"
+              >
+                <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium">{d.file_name}</span>
+                  <span className="block text-xs text-muted-foreground">
+                    {fmtBytes(d.size_bytes)}
+                    {d.uploaded_by_name ? ` · ${d.uploaded_by_name}` : ""}
+                    {d.uploaded_by_role ? ` (${d.uploaded_by_role})` : ""}
+                  </span>
+                </span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="rounded-lg"
+                  disabled={download.isPending}
+                  onClick={() =>
+                    download.mutate(
+                      { document_id: d.id },
+                      {
+                        onError: (e) =>
+                          toast.error(e instanceof Error ? e.message : "Download failed"),
+                      },
+                    )
+                  }
+                >
+                  <Download className="h-4 w-4" />
+                </Button>
+                {d.can_delete ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="rounded-lg text-destructive hover:text-destructive"
+                    disabled={del.isPending}
+                    onClick={() => {
+                      if (!window.confirm(`Delete “${d.file_name}”? This cannot be undone.`))
+                        return;
+                      del.mutate(
+                        { document_id: d.id },
+                        {
+                          onSuccess: () => toast.success("Document deleted"),
+                          onError: (e) =>
+                            toast.error(e instanceof Error ? e.message : "Delete failed"),
+                        },
+                      );
+                    }}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </SectionCard>
+  );
+}
+
+/**
+ * §2 — Admin-only TRUE hard delete. Requires typing the exact lead code to
+ * confirm. The server re-authorises (admin only) and permanently removes the
+ * lead row + its duplicate-detection identity; this is not a soft delete.
+ */
+function DeleteLeadCard({ lead }: { lead: UiLead }) {
+  const navigate = useNavigate();
+  const del = useDeleteServerLead();
+  const [confirmText, setConfirmText] = useState("");
+  const armed = confirmText.trim() === lead.lead_id;
+
+  function submit() {
+    if (!armed || del.isPending) return;
+    del.mutate(
+      { code: lead.lead_id },
+      {
+        onSuccess: (r) => {
+          toast.success(`Lead ${r.lead_code} permanently deleted`);
+          void navigate({ to: "/leads" });
+        },
+        onError: (e) => toast.error(e instanceof Error ? e.message : "Could not delete the lead"),
+      },
+    );
+  }
+
+  return (
+    <SectionCard
+      title="Delete lead"
+      description="Permanently removes this lead and its records from the database. It cannot be recovered, and its phone number becomes free for a new lead. This is not an archive."
+    >
+      <div className="space-y-3 rounded-lg border border-destructive/30 bg-destructive/5 p-4">
+        <div className="space-y-1.5">
+          <Label className="text-xs text-muted-foreground">
+            Type <span className="font-mono font-semibold">{lead.lead_id}</span> to confirm
+          </Label>
+          <Input
+            value={confirmText}
+            onChange={(e) => setConfirmText(e.target.value)}
+            placeholder={lead.lead_id}
+            autoComplete="off"
+          />
+        </div>
+        <Button variant="destructive" disabled={!armed || del.isPending} onClick={submit}>
+          <Trash2 className="mr-1.5 h-4 w-4" />
+          {del.isPending ? "Deleting…" : "Permanently delete this lead"}
+        </Button>
+      </div>
+    </SectionCard>
+  );
+}
+
 function LeadDetailPage() {
   const { leadId } = Route.useParams();
   const { user } = useSession();
-  const leads = useLeads();
-  const lead = leads.find((l) => l.lead_id === leadId);
-  const all = useFollowUps();
-  const [schedulerOpen, setSchedulerOpen] = useState(false);
+  const { lead, isLoading } = useServerLead(leadId);
+  const { followUps: all } = useServerFollowUps();
 
-  const isAgent = user?.role === "agent";
   const convertedFrom = useMemo(
     () => all.find((f) => f.converted_lead_id === leadId) ?? null,
     [all, leadId],
@@ -87,6 +399,9 @@ function LeadDetailPage() {
   }, [all, leadId]);
 
   if (!lead) {
+    if (isLoading) {
+      return <p className="py-16 text-center text-sm text-muted-foreground">Loading lead…</p>;
+    }
     return (
       <div className="space-y-6">
         <PageHeader title="Lead not found" description={`No lead matches ${leadId}.`} />
@@ -120,13 +435,6 @@ function LeadDetailPage() {
             [[lead.city, lead.state].filter(Boolean).join(", "), lead.file_name]
               .filter(Boolean)
               .join(" · ") || "New customer Lead"
-          }
-          actions={
-            !isAgent ? (
-              <Button className="rounded-lg" onClick={() => setSchedulerOpen(true)}>
-                <CalendarPlus className="mr-1.5 h-4 w-4" /> Schedule follow-up
-              </Button>
-            ) : null
           }
         />
       </div>
@@ -175,10 +483,13 @@ function LeadDetailPage() {
             <Field label="Debt amount" value={`$${lead.debt_amount.toLocaleString()}`} />
             <Field label="Credit status" value={lead.credit} />
             <Field label="Current debts" value={lead.current_late} />
-            <Field label="Process" value={lead.process} />
           </div>
         </SectionCard>
       </div>
+
+      {user?.role === "admin" ? <ReassignCloserCard lead={lead} /> : null}
+
+      <LeadDocumentsCard leadCode={lead.lead_id} />
 
       {lead.comment ? (
         <SectionCard title="Lead notes" description="Captured when the Lead was created">
@@ -189,13 +500,6 @@ function LeadDetailPage() {
       <SectionCard
         title="Follow-ups for this Lead"
         description={`${groups.total} attached · one Lead, many follow-ups`}
-        action={
-          !isAgent ? (
-            <Button size="sm" className="rounded-lg" onClick={() => setSchedulerOpen(true)}>
-              <CalendarPlus className="mr-1.5 h-4 w-4" /> Schedule follow-up
-            </Button>
-          ) : null
-        }
       >
         {groups.total === 0 ? (
           <EmptyState
@@ -260,7 +564,7 @@ function LeadDetailPage() {
         follow-up.
       </Card>
 
-      <FollowUpScheduler open={schedulerOpen} onOpenChange={setSchedulerOpen} lead={lead} />
+      {user?.role === "admin" ? <DeleteLeadCard lead={lead} /> : null}
     </div>
   );
 }

@@ -10,18 +10,13 @@ import {
   YAxis,
 } from "recharts";
 import { Button } from "@/components/ui/button";
-import {
-  ActivityTimeline,
-  ChartCard,
-  MetricCard,
-  SectionCard,
-} from "@/components/officeverse/primitives";
+import { ChartCard, MetricCard, SectionCard } from "@/components/officeverse/primitives";
 import { FloatingPanel } from "@/components/officeverse/floating-panel";
 import { OfficeverseRoom } from "@/components/officeverse/officeverse-room";
-import { EmployeeIdentity } from "@/components/officeverse/employee-identity";
-import { IdentityToggle } from "@/components/officeverse/identity-controls";
-import { useIdentityMode } from "@/lib/officeverse/identity";
-import { ATTENDANCE_TREND, AUDIT, EMPLOYEES, PROCESSES } from "@/lib/officeverse/data";
+import { StaffAvatar } from "@/components/officeverse/staff-avatar";
+import { useMemo } from "react";
+import { ATTENDANCE_TREND, PROCESSES } from "@/lib/officeverse/data";
+import { useServerStaff } from "@/lib/officeverse/use-staff";
 
 export const Route = createFileRoute("/_shell/people")({
   head: () => ({
@@ -38,22 +33,31 @@ export const Route = createFileRoute("/_shell/people")({
   component: PeopleHub,
 });
 
-const PRESENCE_ORDER = { online: 0, away: 1, offline: 2 } as const;
-
 function PeopleHub() {
-  const [idMode, setIdMode] = useIdentityMode();
-  const present = EMPLOYEES.filter((e) => e.status === "Present").length;
-  const onLeave = EMPLOYEES.filter((e) => e.status === "On Leave").length;
-  const onlineNow = EMPLOYEES.filter((e) => e.presence === "online").length;
-  const floor = [...EMPLOYEES].sort(
-    (a, b) => PRESENCE_ORDER[a.presence] - PRESENCE_ORDER[b.presence],
-  );
+  const { staff: agents } = useServerStaff("agent");
+  const { staff: closers } = useServerStaff("closer");
+
+  const { floor, present, onLeave, joinedThisMonth, joiners } = useMemo(() => {
+    const roster = [
+      ...agents.map((a) => ({ ...a, designation: "Sales Agent" })),
+      ...closers.map((c) => ({ ...c, designation: "Closer" })),
+    ];
+    const ym = new Date().toISOString().slice(0, 7);
+    return {
+      floor: roster,
+      present: roster.filter((e) => e.status === "active").length,
+      onLeave: roster.filter((e) => e.status === "on_leave").length,
+      joinedThisMonth: roster.filter((e) => (e.registered_on ?? "").slice(0, 7) === ym).length,
+      joiners: [...roster]
+        .sort((a, b) => (b.registered_on ?? "").localeCompare(a.registered_on ?? ""))
+        .slice(0, 5),
+    };
+  }, [agents, closers]);
 
   return (
     <OfficeverseRoom
       room="people"
       title="People Hub"
-      pose="happy"
       tagline="The human side of the TeleMaster India — who's in, who's out, who's new."
       actions={
         <Button asChild className="rounded-full">
@@ -62,35 +66,42 @@ function PeopleHub() {
       }
     >
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <MetricCard label="Headcount" value={EMPLOYEES.length} icon={Users} />
+        <MetricCard label="Headcount" value={floor.length} icon={Users} />
         <MetricCard label="Present today" value={present} icon={UserCheck} tone="success" />
         <MetricCard label="On leave" value={onLeave} icon={CalendarDays} tone="warning" />
-        <MetricCard label="Joined this month" value={3} icon={UserPlus} tone="accent" />
+        <MetricCard
+          label="Joined this month"
+          value={joinedThisMonth}
+          icon={UserPlus}
+          tone="accent"
+        />
       </div>
 
-      <FloatingPanel
-        title="On the floor"
-        description={`${onlineNow} online now · ${EMPLOYEES.length} on the team`}
-        icon={Users}
-        action={<IdentityToggle mode={idMode} onChange={setIdMode} />}
-      >
+      <FloatingPanel title="On the floor" description={`${floor.length} on the team`} icon={Users}>
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {floor.map((e) => (
             <div
-              key={e.id}
+              key={e.code}
               className="flex items-center gap-3 rounded-2xl border border-border/60 bg-secondary/20 p-3"
             >
-              <EmployeeIdentity name={e.name} mode={idMode} size="medium" presence={e.presence} />
+              <StaffAvatar
+                userId={e.user_id}
+                name={e.full_name}
+                hasPhoto={e.photo_available}
+                size="medium"
+              />
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-semibold">{e.name}</p>
-                <p className="truncate text-xs text-muted-foreground">{e.designation}</p>
+                <p className="truncate text-sm font-semibold">{e.full_name}</p>
+                <p className="truncate text-xs text-muted-foreground">
+                  {e.designation} · {e.code}
+                </p>
               </div>
               <span
                 className="shrink-0 text-sm leading-none"
-                title={PROCESSES[e.process].label}
-                aria-label={PROCESSES[e.process].label}
+                title={PROCESSES[e.process as keyof typeof PROCESSES]?.label ?? e.process}
+                aria-label={e.process}
               >
-                {PROCESSES[e.process].flags}
+                {PROCESSES[e.process as keyof typeof PROCESSES]?.flags ?? e.process}
               </span>
             </div>
           ))}
@@ -98,7 +109,10 @@ function PeopleHub() {
       </FloatingPanel>
 
       <div className="grid gap-5 lg:grid-cols-[1.5fr_1fr]">
-        <ChartCard title="Attendance trend" subtitle="Present vs late vs leave across the week">
+        <ChartCard
+          title="Attendance trend"
+          subtitle="Illustrative — live attendance analytics land with the reporting phase"
+        >
           <ResponsiveContainer width="100%" height={290}>
             <AreaChart data={ATTENDANCE_TREND}>
               <defs>
@@ -156,17 +170,22 @@ function PeopleHub() {
 
         <SectionCard title="New joiners" description="Say hello 👋">
           <ul className="space-y-3">
-            {EMPLOYEES.slice(0, 5).map((e) => (
+            {joiners.map((e) => (
               <li
-                key={e.id}
+                key={e.code}
                 className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3"
               >
-                <EmployeeIdentity name={e.name} mode={idMode} size="small" presence={e.presence} />
+                <StaffAvatar
+                  userId={e.user_id}
+                  name={e.full_name}
+                  hasPhoto={e.photo_available}
+                  size="medium"
+                />
                 <div className="min-w-0">
-                  <p className="truncate text-sm font-medium">{e.name}</p>
+                  <p className="truncate text-sm font-medium">{e.full_name}</p>
                   <p className="truncate text-xs text-muted-foreground">{e.designation}</p>
                 </div>
-                <span className="shrink-0 text-xs text-muted-foreground">{e.joining_date}</span>
+                <span className="shrink-0 text-xs text-muted-foreground">{e.registered_on}</span>
               </li>
             ))}
           </ul>
@@ -174,8 +193,18 @@ function PeopleHub() {
       </div>
 
       <div className="grid gap-5 lg:grid-cols-2">
-        <SectionCard title="Recent HR activity">
-          <ActivityTimeline items={AUDIT.slice(0, 5)} />
+        <SectionCard title="Recent additions" description="Newest agents & closers">
+          <ul className="space-y-3 text-sm">
+            {joiners.map((e) => (
+              <li key={e.code} className="flex items-center justify-between gap-3">
+                <span className="min-w-0 truncate">
+                  <span className="font-medium">{e.full_name}</span>{" "}
+                  <span className="text-muted-foreground">joined as {e.designation}</span>
+                </span>
+                <span className="shrink-0 text-xs text-muted-foreground">{e.registered_on}</span>
+              </li>
+            ))}
+          </ul>
         </SectionCard>
         <SectionCard title="Shortcuts" description="Common HR jobs">
           <div className="flex flex-wrap gap-2">

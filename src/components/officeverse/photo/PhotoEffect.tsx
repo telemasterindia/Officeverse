@@ -46,14 +46,16 @@ export function PhotoEffect({
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     const w = (canvas.width = canvas.clientWidth * dpr);
     const h = (canvas.height = canvas.clientHeight * dpr);
+    // Premium, restrained recognition palette — electric blue / cyan / white /
+    // silver. `coins` keeps green (money is money). No rainbow / childish mix.
     const COLORS =
       particle === "coins"
-        ? ["#1a9c5b", "#37c47f", "#c9a227"]
+        ? ["#1a9c5b", "#37c47f", "#8fc0ff"]
         : particle === "colour-splash"
-          ? ["#ff4da6", "#ffcf3f", "#3fd0ff", "#7cff6b", "#b57bff"]
+          ? ["#4c8dff", "#7db4ff", "#a9d0ff", "#e6efff"]
           : particle === "fireworks"
-            ? ["#ffd24d", "#ff7a59", "#7cc4ff", "#ffffff"]
-            : ["#8ab4ff", "#ffd24d", "#ff7ac7", "#7cff9e"];
+            ? ["#3b7bef", "#6ea8ff", "#bcd6ff", "#ffffff"]
+            : ["#4c8dff", "#8fc0ff", "#cfe0ff", "#ffffff"];
     const N = particle === "sparkle" ? 22 : 46;
     type P = { x: number; y: number; vx: number; vy: number; r: number; c: string; life: number };
     const parts: P[] = Array.from({ length: N }, () => ({
@@ -108,13 +110,18 @@ export function PhotoEffect({
   }, [active, burstMs]);
 
   return (
-    <span className={cn("ov-photo-fx", className)} data-effect={cfg.id}>
+    <span
+      className={cn("ov-photo-fx", active && !reduced && "ov-photo-fx-live", className)}
+      data-effect={cfg.id}
+    >
       <span
         className={cn("ov-photo-fx-glow", active && !reduced && cfg.animateClass)}
         style={{ background: glow }}
         aria-hidden
       />
-      <span className={cn("ov-photo-fx-ring overflow-hidden ring-inset", ring)}>{children}</span>
+      {/* the ring is OUTSET so it stays visible over the photo (UAT #13 — an
+          inset ring was hidden behind the image) */}
+      <span className={cn("ov-photo-fx-ring", ring)}>{children}</span>
       {wantParticles ? <canvas ref={canvasRef} className="ov-photo-fx-canvas" aria-hidden /> : null}
       {cfg.badge ? (
         <span className="ov-photo-fx-badge" aria-hidden>

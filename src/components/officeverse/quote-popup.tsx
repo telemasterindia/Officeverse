@@ -3,8 +3,6 @@ import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { QUOTES } from "@/lib/officeverse/data";
 import { useSession } from "@/lib/officeverse/session";
-import { CharacterStage } from "./character-stage";
-import { RoomScene } from "./room-scene";
 import { ShiftIdentityTag } from "./shift-badge";
 
 function greeting() {
@@ -70,28 +68,7 @@ export function QuotePopup() {
             </h2>
 
             <div
-              className="animate-rise-in relative mx-auto mt-6 w-full max-w-[340px] overflow-hidden rounded-[1.75rem]"
-              style={{ animationDelay: "120ms", background: "var(--room-wash)" }}
-              data-room="workspace"
-            >
-              <RoomScene
-                room="workspace"
-                className="absolute inset-x-0 bottom-0 h-[64%] w-full text-foreground opacity-90"
-              />
-              <div className="relative grid place-items-end px-5 pb-4 pt-7">
-                <CharacterStage
-                  name={user.name}
-                  process={user.process}
-                  presence="online"
-                  pose="happy"
-                  expression="excited"
-                  showShiftBadge={false}
-                />
-              </div>
-            </div>
-
-            <div
-              className="animate-rise-in mt-5 flex flex-wrap items-center justify-center gap-2"
+              className="animate-rise-in mt-6 flex flex-wrap items-center justify-center gap-2"
               style={{ animationDelay: "180ms" }}
             >
               <ShiftIdentityTag code={user.process} />

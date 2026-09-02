@@ -4,9 +4,11 @@
  * lives in ../../hr/payroll.ts (pure). Nothing here recomputes the regularity
  * bonus — that is the Phase-12 engine's job.
  */
-import { and, asc, desc, eq, gte, lte, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gte, lte, sql, type SQL } from "drizzle-orm";
 import { getDb, type DBX } from "@/lib/db";
 import {
+  agents,
+  closers,
   payrollRuns,
   salaryProfiles,
   users,
@@ -15,6 +17,9 @@ import {
   type PayrollRun,
   type SalaryProfile,
 } from "@/lib/db/schema";
+
+/** current canonical Employee ID (agents.agent_code / closers.closer_code) */
+const EMPLOYEE_CODE_SQL = sql<string | null>`coalesce(${agents.agentCode}, ${closers.closerCode})`;
 
 /* --------------------------- salary_profiles -------------------- */
 
@@ -68,21 +73,33 @@ export async function listOpenSalaryProfilesBefore(
 export interface SalaryProfileListRow extends SalaryProfile {
   employeeName: string;
   employeeProcess: string;
+  employeeCode: string | null;
+  employeeRole: string;
+  photoAvailable: boolean;
 }
 
 export async function listSalaryProfiles(
-  filter: { employee?: string | undefined },
+  filter: { employee?: string | undefined; process?: string | undefined },
   ex: DBX = getDb(),
 ): Promise<SalaryProfileListRow[]> {
+  // Authoritative process is `users.process` (never a snapshot / shift text).
+  const conds: SQL[] = [];
+  if (filter.process) conds.push(eq(users.process, filter.process as never));
   const rows = await ex
     .select({
       row: salaryProfiles,
       employeeName: users.fullName,
       employeeEmail: users.email,
       employeeProcess: users.process,
+      employeeRole: users.role,
+      photoAssetId: users.photoAssetId,
+      employeeCode: EMPLOYEE_CODE_SQL,
     })
     .from(salaryProfiles)
     .innerJoin(users, eq(users.id, salaryProfiles.userId))
+    .leftJoin(agents, eq(agents.userId, users.id))
+    .leftJoin(closers, eq(closers.userId, users.id))
+    .where(conds.length ? and(...conds) : undefined)
     .orderBy(desc(salaryProfiles.effectiveFrom))
     .limit(1000);
   const q = filter.employee?.trim().toLowerCase();
@@ -95,6 +112,9 @@ export async function listSalaryProfiles(
       ...r.row,
       employeeName: r.employeeName,
       employeeProcess: r.employeeProcess,
+      employeeCode: r.employeeCode ?? null,
+      employeeRole: r.employeeRole,
+      photoAvailable: r.photoAssetId != null,
     }));
 }
 
@@ -142,6 +162,9 @@ export interface PayrollFilter {
 }
 export interface PayrollListRow extends PayrollRun {
   employeeName: string;
+  employeeProcess: string;
+  employeeCode: string | null;
+  photoAvailable: boolean;
 }
 
 export async function listPayrollRuns(
@@ -151,11 +174,22 @@ export async function listPayrollRuns(
   const conds: SQL[] = [];
   if (f.month) conds.push(eq(payrollRuns.periodMonth, f.month));
   if (f.status) conds.push(eq(payrollRuns.status, f.status as never));
-  if (f.process) conds.push(eq(payrollRuns.process, f.process as never));
+  // Authoritative process filter — the employee's CURRENT `users.process`, not
+  // the per-run snapshot column.
+  if (f.process) conds.push(eq(users.process, f.process as never));
   const rows = await ex
-    .select({ row: payrollRuns, employeeName: users.fullName, employeeEmail: users.email })
+    .select({
+      row: payrollRuns,
+      employeeName: users.fullName,
+      employeeEmail: users.email,
+      employeeProcess: users.process,
+      photoAssetId: users.photoAssetId,
+      employeeCode: EMPLOYEE_CODE_SQL,
+    })
     .from(payrollRuns)
     .innerJoin(users, eq(users.id, payrollRuns.userId))
+    .leftJoin(agents, eq(agents.userId, users.id))
+    .leftJoin(closers, eq(closers.userId, users.id))
     .where(conds.length ? and(...conds) : undefined)
     .orderBy(desc(payrollRuns.periodMonth), asc(users.fullName))
     .limit(3000);
@@ -165,7 +199,13 @@ export async function listPayrollRuns(
       (r) =>
         !q || r.employeeName.toLowerCase().includes(q) || r.employeeEmail.toLowerCase().includes(q),
     )
-    .map((r) => ({ ...r.row, employeeName: r.employeeName }));
+    .map((r) => ({
+      ...r.row,
+      employeeName: r.employeeName,
+      employeeProcess: r.employeeProcess,
+      employeeCode: r.employeeCode ?? null,
+      photoAvailable: r.photoAssetId != null,
+    }));
 }
 
 export async function listPayrollRunsForUser(

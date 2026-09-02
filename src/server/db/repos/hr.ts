@@ -278,6 +278,35 @@ export async function countAttendanceStatus(
   return Number(rows[0]?.n ?? 0);
 }
 
+/**
+ * Admin UAT Batch-2 §5 — monthly CHECK-IN lateness counts, straight off the
+ * stored `attendance.check_in_status` (NORMAL→ON_TIME / SHORT_LATE→SHORT /
+ * LATE→LATE). These feed the Late-Units engine. Distinct from
+ * `countAttendanceStatus` above, which counts the OVERALL day status (and so
+ * also folds in early-departure "short attendance").
+ */
+export async function countCheckInLatenessInMonth(
+  userId: number,
+  from: string,
+  to: string,
+  ex: DBX = getDb(),
+): Promise<{ shortLate: number; late: number }> {
+  const rows = await ex
+    .select({
+      s: sql<number>`sum(case when ${attendance.checkInStatus} = 'SHORT' then 1 else 0 end)`,
+      l: sql<number>`sum(case when ${attendance.checkInStatus} = 'LATE' then 1 else 0 end)`,
+    })
+    .from(attendance)
+    .where(
+      and(
+        eq(attendance.userId, userId),
+        gte(attendance.operationalDate, from),
+        lte(attendance.operationalDate, to),
+      ),
+    );
+  return { shortLate: Number(rows[0]?.s ?? 0), late: Number(rows[0]?.l ?? 0) };
+}
+
 /* ------------------------------- holidays ------------------------- */
 
 export async function holidayMapInRange(

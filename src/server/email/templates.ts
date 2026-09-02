@@ -44,11 +44,35 @@ function escapeHtml(s: string): string {
 }
 
 /** Wrap plain lines in a minimal, self-contained HTML body. */
-function htmlBody(heading: string, lines: string[]): string {
+/**
+ * Admin UAT §7 — every official email uses the ONE central company logo + name.
+ * The renderer pulls `logo_url` / `org_name` / `doc_footer` from the payload;
+ * the caller fills them from `getCompanyBranding()`. When no logo is configured
+ * the header degrades to the company name only.
+ */
+function brandFromPayload(p: EmailPayload): { logoUrl: string; orgName: string; footer: string } {
+  return {
+    logoUrl: str(p, "logo_url"),
+    orgName: str(p, "org_name", "TMI Officeverse"),
+    footer: str(p, "doc_footer"),
+  };
+}
+
+function htmlBody(heading: string, lines: string[], p: EmailPayload = {}): string {
+  const { logoUrl, orgName, footer } = brandFromPayload(p);
+  const logo = logoUrl
+    ? `<img src="${escapeHtml(logoUrl)}" alt="${escapeHtml(orgName)}" style="max-height:40px;max-width:180px;display:block;margin:0 0 4px" />`
+    : "";
+  const header = `<div style="margin:0 0 14px">${logo}<div style="font-weight:600;color:#333">${escapeHtml(
+    orgName,
+  )}</div></div>`;
   const body = lines.map((l) => `<p style="margin:0 0 8px">${escapeHtml(l)}</p>`).join("");
-  return `<div style="font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;font-size:14px;line-height:1.5;color:#111"><h2 style="font-size:16px;margin:0 0 12px">${escapeHtml(
+  const foot = footer
+    ? `<p style="margin:16px 0 0;font-size:12px;color:#888">${escapeHtml(footer)}</p>`
+    : "";
+  return `<div style="font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;font-size:14px;line-height:1.5;color:#111">${header}<h2 style="font-size:16px;margin:0 0 12px">${escapeHtml(
     heading,
-  )}</h2>${body}</div>`;
+  )}</h2>${body}${foot}</div>`;
 }
 
 /* ------------------------------ renderers -------------------------- */
@@ -125,7 +149,37 @@ const RENDERERS: Record<EmailTemplateId, Renderer> = {
     return {
       subject: title,
       text: lines.join("\n") || title,
-      html: htmlBody(title, lines.length ? lines : [title]),
+      html: htmlBody(title, lines.length ? lines : [title], p),
+    };
+  },
+
+  // UAT #15 / Admin UAT §10 — one plain branded email per agent per day, stating
+  // ONLY today's count. No customer names, phones or lead details.
+  FOLLOW_UP_DAILY_SUMMARY: (p) => {
+    const countRaw = Number(p["count"]);
+    const count = Number.isFinite(countRaw) ? Math.max(0, Math.trunc(countRaw)) : 0;
+    const noun = count === 1 ? "follow-up" : "follow-ups";
+    const line = `You have ${count} ${noun} for today.`;
+    return {
+      subject: `You have ${count} ${noun} for today`,
+      text: line,
+      html: htmlBody("Today's follow-ups", [line], p),
+    };
+  },
+
+  // UAT #16 / Admin UAT §9 — automatic branded office birthday greeting.
+  BIRTHDAY_GREETING: (p) => {
+    const name = str(p, "recipient_name", "there");
+    const org = str(p, "org_name", "TMI Officeverse");
+    const lines = [
+      `Happy Birthday, ${name}! 🎉`,
+      `Everyone at ${org} wishes you a wonderful day and a fantastic year ahead.`,
+      `Thank you for being part of the team.`,
+    ];
+    return {
+      subject: `Happy Birthday, ${name}! 🎂`,
+      text: lines.join("\n"),
+      html: htmlBody(`Happy Birthday from ${org}`, lines, p),
     };
   },
 

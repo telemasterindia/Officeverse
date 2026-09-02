@@ -20,9 +20,16 @@ export interface PublicUser {
   phone: string | null;
   mustChangePassword: boolean;
   photoUrl: string | null;
+  /** current canonical business Employee ID (agents.agent_code /
+   *  closers.closer_code); null when the user has no staff record */
+  employeeCode: string | null;
 }
 
-export function toPublicUser(u: User, photoUrl: string | null = null): PublicUser {
+export function toPublicUser(
+  u: User,
+  photoUrl: string | null = null,
+  employeeCode: string | null = null,
+): PublicUser {
   return {
     id: u.id,
     email: u.email,
@@ -33,6 +40,7 @@ export function toPublicUser(u: User, photoUrl: string | null = null): PublicUse
     phone: u.phone ?? null,
     mustChangePassword: u.mustChangePassword,
     photoUrl,
+    employeeCode,
   };
 }
 

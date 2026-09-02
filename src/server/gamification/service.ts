@@ -286,6 +286,103 @@ export async function awardEvent(input: AwardInput, meta: Meta = {}): Promise<Aw
   };
 }
 
+/* ================= scored award (open-ended engine) ========= *
+ * Phase 2+. Called ONLY by the Scoring Engine (src/server/scoring/ingest.ts)
+ * after it has evaluated an Admin-authored rule against a BusinessEvent. It
+ * APPENDS one immutable row to the SAME gamification_point_transactions ledger
+ * (no second ledger), tagged with the rule id / version / name + evaluation
+ * context + score-run id so every point is explainable forever.
+ *
+ * It does NOT touch a CRM row, does NOT run the legacy point-rule lookup, and
+ * does NOT decide the amount — `points` is computed by the engine from the
+ * rule's outcome (negatives are ordinary points). Streaks / achievements keep
+ * running off the resulting ledger via awardEvent(), unchanged.                */
+
+export interface AwardScoredInput {
+  subjectUserId: number;
+  /** BusinessEvent.type — a domain string (the ledger `event` column is VARCHAR since 0014) */
+  event: string;
+  source: { type: string; id: string };
+  ruleId: number;
+  ruleVersion: number;
+  ruleName: string;
+  points: number;
+  context: unknown;
+  scoreRunId: number;
+  /** authoritative operational shift date from the BusinessEvent */
+  operationalDate: string;
+  /** `<event>:<sourceType>:<sourceId>:rule:<ruleId>:v<ruleVersion>` */
+  dedupeKey: string;
+}
+
+export interface AwardScoredResult {
+  awarded: boolean;
+  transactionId: number;
+}
+
+export async function awardScored(
+  input: AwardScoredInput,
+  meta: Meta = {},
+): Promise<AwardScoredResult> {
+  if (!isDbConfigured()) throw new HttpError(503, "Database not configured", "db_unavailable");
+  const db = getDb();
+
+  const user = await getUserById(input.subjectUserId);
+  if (!user) return { awarded: false, transactionId: 0 };
+  if (!isGamificationParticipant(user.role)) {
+    // Admin / HR are not participants — no-op, exactly like awardEvent.
+    return { awarded: false, transactionId: 0 };
+  }
+  const role = user.role as "agent" | "closer";
+  const points = Math.trunc(input.points);
+
+  const { id, created } = await repo.insertPointTransaction(
+    {
+      userId: user.id,
+      role,
+      process: user.process,
+      event: input.event,
+      points,
+      operationalDate: input.operationalDate,
+      referenceType: input.source.type.slice(0, 40),
+      referenceId: input.source.id.slice(0, 64),
+      dedupeKey: input.dedupeKey.slice(0, 191),
+      status: "ACTIVE",
+      source: "system",
+      ruleId: input.ruleId,
+      ruleVersion: input.ruleVersion,
+      ruleName: input.ruleName.slice(0, 120),
+      context: input.context as never,
+      scoreRunId: input.scoreRunId,
+      createdAt: nowIST(),
+    },
+    db,
+  );
+  if (!created) return { awarded: false, transactionId: id };
+
+  await recordAudit({
+    actorUserId: null,
+    actorRole: "system",
+    action: "gamification.award_scored",
+    entityType: "gamification_point_transaction",
+    entityId: id,
+    metadata: {
+      user: user.id,
+      event: input.event,
+      points,
+      operationalDate: input.operationalDate,
+      ruleId: input.ruleId,
+      ruleVersion: input.ruleVersion,
+      scoreRunId: input.scoreRunId,
+      source: input.source,
+    },
+    ip: meta.ip ?? null,
+    userAgent: meta.userAgent ?? null,
+  });
+
+  return { awarded: true, transactionId: id };
+}
+
 /* ======================= admin corrections ================== *
  * There is NO "give this user 100 points" button. A correction is either the
  * auditable REVERSAL of a specific ledger row, or an explicit ADMIN_ADJUSTMENT

@@ -24,41 +24,49 @@ describe("US shift anchors", () => {
   });
 });
 
-describe("US check-in classification — 10-minute Short Late window (Phase 23 §8)", () => {
-  it("8:59 PM → NORMAL", () => {
-    expect(classifyLate("US", D, usIn("20:59:00"))).toBe("NORMAL");
-    expect(cls(usIn("20:59:00")).checkInStatus).toBe("ON_TIME");
-    expect(cls(usIn("20:59:00")).lateClass).toBe("NORMAL");
+describe("US check-in classification — Admin UAT Batch-2 §5 boundaries (≤20:50 NORMAL · 20:51–21:30 SHORT LATE · ≥21:31 LATE)", () => {
+  it("8:50 PM (reporting time) → NORMAL", () => {
+    expect(classifyLate("US", D, usIn("20:50:00"))).toBe("NORMAL");
+    expect(cls(usIn("20:50:00")).checkInStatus).toBe("ON_TIME");
+    expect(cls(usIn("20:50:59")).lateClass).toBe("NORMAL");
   });
   it("early check-in 7:30 PM → NORMAL (early is never late)", () => {
     expect(cls(usIn("19:30:00")).lateClass).toBe("NORMAL");
   });
-  it("9:00 PM → SHORT LATE", () => {
+  it("8:51 PM → SHORT LATE (first minute of the window)", () => {
+    expect(classifyLate("US", D, usIn("20:51:00"))).toBe("SHORT_LATE");
+    expect(cls(usIn("20:51:00")).checkInStatus).toBe("SHORT");
+    expect(cls(usIn("20:51:00")).lateClass).toBe("SHORT_LATE");
+  });
+  it("9:00 PM (shift start) → SHORT LATE", () => {
     expect(classifyLate("US", D, usIn("21:00:00"))).toBe("SHORT_LATE");
-    expect(cls(usIn("21:00:00")).checkInStatus).toBe("SHORT");
-    expect(cls(usIn("21:00:00")).lateClass).toBe("SHORT_LATE");
   });
-  it("9:10 PM → SHORT LATE (last minute of the window)", () => {
-    expect(classifyLate("US", D, usIn("21:10:00"))).toBe("SHORT_LATE");
-    expect(cls(usIn("21:10:59")).lateClass).toBe("SHORT_LATE");
+  it("9:30 PM → SHORT LATE (last minute of the window)", () => {
+    expect(classifyLate("US", D, usIn("21:30:00"))).toBe("SHORT_LATE");
+    expect(cls(usIn("21:30:59")).lateClass).toBe("SHORT_LATE");
   });
-  it("9:11 PM → LATE", () => {
-    expect(classifyLate("US", D, usIn("21:11:00"))).toBe("LATE");
-    expect(cls(usIn("21:11:00")).checkInStatus).toBe("LATE");
-    expect(cls(usIn("21:11:00")).lateClass).toBe("LATE");
-    expect(cls(usIn("21:11:00")).status).toBe("LATE");
+  it("9:31 PM → LATE", () => {
+    expect(classifyLate("US", D, usIn("21:31:00"))).toBe("LATE");
+    expect(cls(usIn("21:31:00")).checkInStatus).toBe("LATE");
+    expect(cls(usIn("21:31:00")).lateClass).toBe("LATE");
+    expect(cls(usIn("21:31:00")).status).toBe("LATE");
   });
-  it("the Short Late window is at most 10 minutes wide", () => {
-    // 21:00 .. 21:10 inclusive is SHORT_LATE; 21:11 is LATE
-    for (const m of [0, 1, 5, 9, 10]) {
-      const hh = 21;
+  it("every minute 20:51 .. 21:30 is SHORT LATE; 21:31 is LATE", () => {
+    for (const [h, m] of [
+      [20, 51],
+      [21, 0],
+      [21, 15],
+      [21, 29],
+      [21, 30],
+    ] as const) {
       const mm = String(m).padStart(2, "0");
-      expect(classifyLate("US", D, usIn(`${hh}:${mm}:00`))).toBe("SHORT_LATE");
+      expect(classifyLate("US", D, usIn(`${h}:${mm}:00`))).toBe("SHORT_LATE");
     }
+    expect(classifyLate("US", D, usIn("21:31:00"))).toBe("LATE");
   });
   it("raw lateMinutes are still measured from the 20:50 reporting time", () => {
     expect(cls(usIn("21:00:00")).lateMinutes).toBe(10);
-    expect(cls(usIn("21:11:00")).lateMinutes).toBe(21);
+    expect(cls(usIn("21:31:00")).lateMinutes).toBe(41);
   });
 });
 
@@ -93,7 +101,7 @@ describe("US overall status", () => {
   });
 });
 
-describe("India check-in classification — 10-minute Short Late window (Phase 23 §9)", () => {
+describe("India check-in classification — Admin UAT Batch-2 §5 (≤09:30 NORMAL · 09:31–10:00 SHORT LATE · ≥10:01 LATE)", () => {
   const DI = "2026-08-31";
   const inAt = (hhmmss: string) => `${DI} ${hhmmss}`;
   const c = (t: string) =>
@@ -105,21 +113,22 @@ describe("India check-in classification — 10-minute Short Late window (Phase 2
     expect(a.shiftEndAt).toBe("2026-08-31 18:30:00");
     expect(a.classificationPending).toBe(false);
   });
-  it("9:39 AM → NORMAL", () => {
-    expect(classifyLate("IN", DI, inAt("09:39:00"))).toBe("NORMAL");
-    expect(c("09:39:00").lateClass).toBe("NORMAL");
+  it("9:30 AM (reporting/shift start) → NORMAL", () => {
+    expect(classifyLate("IN", DI, inAt("09:30:00"))).toBe("NORMAL");
+    expect(c("09:30:59").lateClass).toBe("NORMAL");
   });
-  it("9:40 AM → SHORT LATE", () => {
-    expect(classifyLate("IN", DI, inAt("09:40:00"))).toBe("SHORT_LATE");
-    expect(c("09:40:00").status).toBe("SHORT_ATTENDANCE");
+  it("9:31 AM → SHORT LATE", () => {
+    expect(classifyLate("IN", DI, inAt("09:31:00"))).toBe("SHORT_LATE");
+    expect(c("09:31:00").status).toBe("SHORT_ATTENDANCE");
   });
-  it("9:50 AM → SHORT LATE", () => {
-    expect(classifyLate("IN", DI, inAt("09:50:00"))).toBe("SHORT_LATE");
+  it("10:00 AM → SHORT LATE (last minute of the window)", () => {
+    expect(classifyLate("IN", DI, inAt("10:00:00"))).toBe("SHORT_LATE");
+    expect(c("10:00:59").lateClass).toBe("SHORT_LATE");
   });
-  it("9:51 AM → LATE", () => {
-    expect(classifyLate("IN", DI, inAt("09:51:00"))).toBe("LATE");
-    expect(c("09:51:00").status).toBe("LATE");
-    expect(c("09:51:00").lateClass).toBe("LATE");
+  it("10:01 AM → LATE", () => {
+    expect(classifyLate("IN", DI, inAt("10:01:00"))).toBe("LATE");
+    expect(c("10:01:00").status).toBe("LATE");
+    expect(c("10:01:00").lateClass).toBe("LATE");
   });
   it("raw lateMinutes measured from the 09:30 reporting time", () => {
     expect(c("09:45:00").lateMinutes).toBe(15);

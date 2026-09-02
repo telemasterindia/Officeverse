@@ -6,15 +6,18 @@ import {
   assignmentHistoryFn,
   assignmentRosterFn,
   assignmentWorkloadFn,
+  longDatedFollowUpsFn,
   reassignBulkFn,
 } from "./assignment-fns";
 
-type WorkType = "AGENT_FOLLOWUPS" | "CLOSER_LEADS" | "CLOSER_FOLLOWUPS";
+export type WorkType =
+  "AGENT_FOLLOWUPS" | "CLOSER_LEADS" | "CLOSER_FOLLOWUPS" | "CLOSER_FOLLOWUPS_TO_AGENT";
+export type TransferScope = "OVERDUE" | "DUE_TODAY" | "UPCOMING" | "ALL_PENDING" | "SELECTED";
 
-export function useAssignmentRoster() {
+export function useAssignmentRoster(process?: "US" | "UK" | "IN" | "AU") {
   return useQuery({
-    queryKey: ["assignments", "roster"],
-    queryFn: () => assignmentRosterFn({ data: {} }),
+    queryKey: ["assignments", "roster", process ?? "all"],
+    queryFn: () => assignmentRosterFn({ data: process ? { process } : {} }),
     staleTime: 15_000,
   });
 }
@@ -39,6 +42,15 @@ export function useAssignmentHistory() {
   });
 }
 
+/** §6 — long-dated (≈2–3 month) SCHEDULED follow-ups for Admin review. */
+export function useLongDatedFollowUps(process?: "US" | "UK" | "IN" | "AU") {
+  return useQuery({
+    queryKey: ["assignments", "long-dated", process ?? "all"],
+    queryFn: () => longDatedFollowUpsFn({ data: process ? { process } : {} }),
+    staleTime: 30_000,
+  });
+}
+
 export function useReassignBulk() {
   const qc = useQueryClient();
   return useMutation({
@@ -47,8 +59,17 @@ export function useReassignBulk() {
       fromOwnerId: number;
       toOwnerId: number;
       selection: number[] | "ALL";
+      scope?: TransferScope;
       reason?: string;
     }) => reassignBulkFn({ data: v }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["assignments"] }),
+    onSuccess: () => {
+      // Admin UAT §2 — the new owner must see the work immediately. Refresh the
+      // roster/workload/history AND every downstream view of ownership.
+      qc.invalidateQueries({ queryKey: ["assignments"] });
+      qc.invalidateQueries({ queryKey: ["srv-leads"] });
+      qc.invalidateQueries({ queryKey: ["srv-lead"] });
+      qc.invalidateQueries({ queryKey: ["srv-followups"] });
+      qc.invalidateQueries({ queryKey: ["srv-closers"] });
+    },
   });
 }

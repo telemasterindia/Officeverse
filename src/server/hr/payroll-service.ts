@@ -29,14 +29,47 @@ import {
 } from "./payroll";
 import { PRORATION_BASES, type ProrationBasis } from "./payroll-proration";
 import { PAYROLL_ROUNDING_POLICY } from "./payroll-money";
+import { computeLateDeduction } from "./late-units";
 import { recomputeBonus } from "./service";
 import { env } from "../env";
 import * as repo from "../db/repos/payroll";
 import * as inputsRepo from "../db/repos/payroll-inputs";
 import * as hrRepo from "../db/repos/hr";
+import { getAgentByCode, getCloserByCode } from "../db/repos/staff";
+import { isCanonicalAgentCode, isCanonicalCloserCode } from "@/lib/officeverse/staff-codes";
 import type { NewPayrollRun, NewSalaryProfile, PayrollRun, User } from "@/lib/db/schema";
 
 type Meta = { ip?: string | null; userAgent?: string | null };
+
+/**
+ * Resolve a FULL canonical business Employee ID to the internal `users.id`.
+ *
+ * The prefix routes the lookup — `TMI_CC_###` → `agents.agent_code`,
+ * `TMI_CL_###` → `closers.closer_code` — so an Agent and a Closer that share a
+ * numeric suffix (e.g. `TMI_CC_010` vs `TMI_CL_010`) resolve to two different
+ * users and can never collide. The id is obtained ONLY after this exact-string
+ * match; the input is never coerced to a number and its prefix / leading zeros
+ * are never stripped. Every payroll/salary employee-selection path goes through
+ * here before touching `users.id`.
+ */
+export async function resolveEmployeeUserId(employeeId: string): Promise<number> {
+  const code = (employeeId ?? "").trim();
+  if (isCanonicalAgentCode(code)) {
+    const a = await getAgentByCode(code);
+    if (!a) throw new HttpError(404, `No Agent with Employee ID ${code}`, "employee_not_found");
+    return a.userId;
+  }
+  if (isCanonicalCloserCode(code)) {
+    const c = await getCloserByCode(code);
+    if (!c) throw new HttpError(404, `No Closer with Employee ID ${code}`, "employee_not_found");
+    return c.userId;
+  }
+  throw new HttpError(
+    422,
+    `"${code}" is not a valid Employee ID — use the full canonical form, e.g. TMI_CC_010 (Agent) or TMI_CL_010 (Closer)`,
+    "bad_employee_id",
+  );
+}
 
 /* --------------------------- small helpers ---------------------- */
 
@@ -84,7 +117,12 @@ export interface SetSalaryInput {
 
 export interface SalaryProfileDTO {
   id: number;
+  userId?: number;
   employeeName?: string;
+  /** current canonical Employee ID (agents.agent_code / closers.closer_code) */
+  employeeCode?: string | null;
+  employeeRole?: string;
+  photoAvailable?: boolean;
   process?: string;
   baseSalary: string;
   effectiveFrom: string;
@@ -109,13 +147,24 @@ function profileDTO(
     updatedByUserId: number | null;
     createdAt: string;
     updatedAt: string;
+    userId?: number;
   },
-  extra?: { employeeName?: string; process?: string },
+  extra?: {
+    employeeName?: string;
+    process?: string;
+    employeeCode?: string | null;
+    employeeRole?: string;
+    photoAvailable?: boolean;
+  },
 ): SalaryProfileDTO {
   return {
     id: p.id,
+    ...(p.userId ? { userId: p.userId } : {}),
     ...(extra?.employeeName ? { employeeName: extra.employeeName } : {}),
     ...(extra?.process ? { process: extra.process } : {}),
+    ...(extra?.employeeCode !== undefined ? { employeeCode: extra.employeeCode } : {}),
+    ...(extra?.employeeRole ? { employeeRole: extra.employeeRole } : {}),
+    ...(extra?.photoAvailable !== undefined ? { photoAvailable: extra.photoAvailable } : {}),
     baseSalary: p.baseSalary,
     effectiveFrom: p.effectiveFrom,
     effectiveTo: p.effectiveTo ?? null,
@@ -193,14 +242,20 @@ export async function setSalaryProfile(
 
 export async function listSalaryProfiles(
   actor: Pick<User, "role">,
-  filter: { employee?: string | undefined },
+  filter: { employee?: string | undefined; process?: string | undefined },
 ): Promise<{ dbUnavailable?: boolean; rows: SalaryProfileDTO[] }> {
   assertCanManagePayroll(actor.role as HrRole);
   if (!isDbConfigured()) return { dbUnavailable: true, rows: [] };
   const rows = await repo.listSalaryProfiles(filter);
   return {
     rows: rows.map((r) =>
-      profileDTO(r, { employeeName: r.employeeName, process: r.employeeProcess }),
+      profileDTO(r, {
+        employeeName: r.employeeName,
+        process: r.employeeProcess,
+        employeeCode: r.employeeCode,
+        employeeRole: r.employeeRole,
+        photoAvailable: r.photoAvailable,
+      }),
     ),
   };
 }
@@ -234,6 +289,9 @@ export interface PayrollDTO {
   payrollRunId?: number;
   userId?: number;
   employeeName?: string;
+  /** current canonical Employee ID (agents.agent_code / closers.closer_code) */
+  employeeCode?: string | null;
+  photoAvailable?: boolean;
   month: string;
   process: string;
   status: PayrollStatus;
@@ -254,6 +312,11 @@ export interface PayrollDTO {
   approvedOvertimeMinutes: number;
   overtimeAmount: string;
   adjustmentsTotal: string;
+  /* -- Admin UAT Batch-2 §5 — Late-Units -- */
+  lateShortCount: number;
+  lateFullCount: number;
+  lateUnits: string;
+  lateDeduction: string;
   /** gross before statutory deductions */
   calculatedSalary: string;
   calculationVersion: string;
@@ -263,13 +326,21 @@ export interface PayrollDTO {
   reopenReason: string | null;
 }
 
-function payrollDTO(r: PayrollRun, employeeName?: string): PayrollDTO {
+function payrollDTO(
+  r: PayrollRun,
+  employeeName?: string,
+  extra?: { employeeCode?: string | null; photoAvailable?: boolean; employeeProcess?: string },
+): PayrollDTO {
   return {
     payrollRunId: r.id,
     userId: r.userId,
     ...(employeeName ? { employeeName } : {}),
+    ...(extra?.employeeCode !== undefined ? { employeeCode: extra.employeeCode } : {}),
+    ...(extra?.photoAvailable !== undefined ? { photoAvailable: extra.photoAvailable } : {}),
     month: r.periodMonth,
-    process: r.process,
+    // display the CURRENT authoritative process where we have it (list path);
+    // the per-run snapshot remains the fallback for single-run reads.
+    process: extra?.employeeProcess ?? r.process,
     status: r.status as PayrollStatus,
     baseSalary: r.baseSalary,
     monthlyBaseSalary: r.monthlyBaseSalary,
@@ -287,6 +358,10 @@ function payrollDTO(r: PayrollRun, employeeName?: string): PayrollDTO {
     approvedOvertimeMinutes: r.approvedOvertimeMinutes,
     overtimeAmount: r.overtimeAmount,
     adjustmentsTotal: r.adjustmentsTotal,
+    lateShortCount: r.lateShortCount,
+    lateFullCount: r.lateFullCount,
+    lateUnits: r.lateUnits,
+    lateDeduction: r.lateDeduction,
     calculatedSalary: r.calculatedSalary,
     calculationVersion: r.calculationVersion,
     calculatedAt: r.calculatedAt ?? null,
@@ -297,26 +372,36 @@ function payrollDTO(r: PayrollRun, employeeName?: string): PayrollDTO {
 }
 
 /**
- * Calculate (or recalculate) one employee's payroll for a calendar month.
- * Idempotent — unique (user, month); a DRAFT / CALCULATED run is updated in
- * place, an APPROVED / LOCKED run is refused (reopen first).
+ * Gather every authoritative input for one employee+month and run the pure
+ * breakdown engine — WITHOUT persisting a `payroll_runs` row or writing an
+ * audit entry. This is the single source of the salary calculation: both
+ * `calculatePayrollForEmployee` (persists) and the consolidated
+ * Attendance+Payroll register (read-only preview) call it, so there is exactly
+ * ONE calculation path. It calls the same canonical functions
+ * (`pickEffectiveProfile`, `recomputeBonus`, Late-Units, `calculateMonthlyPayroll`)
+ * in the same order as before.
  */
-export async function calculatePayrollForEmployee(
-  actor: Pick<User, "id" | "role">,
+export interface PayrollComputeResult {
+  calc: ReturnType<typeof calculateMonthlyPayroll>;
+  process: string;
+  effectiveProfileId: number | null;
+  bonusRowId: number | null;
+  /** raw monthly attendance counts feeding the calc (for the register) */
+  attendance: {
+    lateShort: number;
+    late: number;
+    lateUnits: number;
+    approvedLeaveDays: number;
+    activeOffDays: number;
+    unpaidLeaveDays: number;
+  };
+}
+
+export async function computePayrollBreakdown(
   targetUserId: number,
   month: string,
-  meta: Meta = {},
-): Promise<{ ok: true; payroll: PayrollDTO }> {
-  assertCanManagePayroll(actor.role as HrRole);
-  if (!monthRegex(month)) throw new HttpError(400, "month must be YYYY-MM", "bad_month");
-  if (!isDbConfigured()) throw new HttpError(503, "Database not configured", "db_unavailable");
-
+): Promise<PayrollComputeResult> {
   const db = getDb();
-  const existing = await repo.getPayrollRun(targetUserId, month, db);
-  if (existing) {
-    assertPayrollTransition(existing.status as PayrollStatus, "calculate");
-  }
-
   const process = await processOf(targetUserId);
 
   // ---- effective-dated base salary (snapshot) ----
@@ -343,6 +428,19 @@ export async function calculatePayrollForEmployee(
   const { from, to } = monthDayRange(month);
   const employmentPeriods = await inputsRepo.listEmploymentPeriodsForUser(targetUserId, db);
   const unpaidLeaveDays = await inputsRepo.countUnpaidLeaveDaysInMonth(targetUserId, from, to, db);
+
+  // ---- Admin UAT Batch-2 §5 — Late-Units: monthly SHORT-LATE / LATE check-in
+  //      counts → 1-day salary cut when the weighted units reach 3. Per-day
+  //      value = base ÷ ACTUAL calendar days of `month`. Bonus voiding is
+  //      already handled inside recomputeBonus (same threshold), so nothing
+  //      extra is done to `bonus.bonusAmount` here.
+  const lateness = await hrRepo.countCheckInLatenessInMonth(targetUserId, from, to, db);
+  const lateCalc = computeLateDeduction({
+    monthlyBaseSalary: baseSalaryNum,
+    month,
+    shortLateCount: lateness.shortLate,
+    lateCount: lateness.late,
+  });
   const approvedOvertimeMinutes = await inputsRepo.sumApprovedOvertimeMinutes(
     targetUserId,
     month,
@@ -370,7 +468,54 @@ export async function calculatePayrollForEmployee(
     offDeduction: 0,
     overtimeAmount: 0,
     adjustmentsTotal,
+    // Admin UAT Batch-2 §5 — Late-Units (a defined rule, so a real amount)
+    lateShortCount: lateCalc.shortLateCount,
+    lateFullCount: lateCalc.lateCount,
+    lateUnits: lateCalc.lateUnits,
+    lateDeduction: lateCalc.lateDeductionAmount,
   });
+
+  return {
+    calc,
+    process,
+    effectiveProfileId: eff?.id ?? null,
+    bonusRowId: bonusRow?.id ?? null,
+    attendance: {
+      lateShort: lateness.shortLate,
+      late: lateness.late,
+      lateUnits: lateCalc.lateUnits,
+      approvedLeaveDays: bonus.leaveCount,
+      activeOffDays: bonus.offCount,
+      unpaidLeaveDays,
+    },
+  };
+}
+
+/**
+ * Calculate (or recalculate) one employee's payroll for a calendar month.
+ * Idempotent — unique (user, month); a DRAFT / CALCULATED run is updated in
+ * place, an APPROVED / LOCKED run is refused (reopen first).
+ */
+export async function calculatePayrollForEmployee(
+  actor: Pick<User, "id" | "role">,
+  targetUserId: number,
+  month: string,
+  meta: Meta = {},
+): Promise<{ ok: true; payroll: PayrollDTO }> {
+  assertCanManagePayroll(actor.role as HrRole);
+  if (!monthRegex(month)) throw new HttpError(400, "month must be YYYY-MM", "bad_month");
+  if (!isDbConfigured()) throw new HttpError(503, "Database not configured", "db_unavailable");
+
+  const db = getDb();
+  const existing = await repo.getPayrollRun(targetUserId, month, db);
+  if (existing) {
+    assertPayrollTransition(existing.status as PayrollStatus, "calculate");
+  }
+
+  const computed = await computePayrollBreakdown(targetUserId, month);
+  const { calc, process } = computed;
+  const eff = { id: computed.effectiveProfileId };
+  const bonusRow = { id: computed.bonusRowId };
 
   const now = nowIST();
   const snapshot = {
@@ -394,6 +539,10 @@ export async function calculatePayrollForEmployee(
     approvedOvertimeMinutes: calc.approvedOvertimeMinutes,
     overtimeAmount: calc.overtimeAmount,
     adjustmentsTotal: calc.adjustmentsTotal,
+    lateShortCount: calc.lateShortCount,
+    lateFullCount: calc.lateFullCount,
+    lateUnits: calc.lateUnits.toFixed(1),
+    lateDeduction: calc.lateDeduction,
     salaryProfileId: eff?.id ?? null,
     bonusRecordId: bonusRow?.id ?? null,
     calculationVersion: PAYROLL_CALC_VERSION_V2,
@@ -453,6 +602,10 @@ export async function calculatePayrollForEmployee(
         approvedOvertimeMinutes: snapshot.approvedOvertimeMinutes,
         overtimeAmount: snapshot.overtimeAmount,
         adjustmentsTotal: snapshot.adjustmentsTotal,
+        lateShortCount: snapshot.lateShortCount,
+        lateFullCount: snapshot.lateFullCount,
+        lateUnits: snapshot.lateUnits,
+        lateDeduction: snapshot.lateDeduction,
         calculatedSalary: snapshot.calculatedSalary,
       },
       salaryProfileId: snapshot.salaryProfileId,
@@ -596,7 +749,15 @@ export async function listPayroll(
   assertCanManagePayroll(actor.role as HrRole);
   if (!isDbConfigured()) return { dbUnavailable: true, rows: [] };
   const rows = await repo.listPayrollRuns(f);
-  return { rows: rows.map((r) => payrollDTO(r, r.employeeName)) };
+  return {
+    rows: rows.map((r) =>
+      payrollDTO(r, r.employeeName, {
+        employeeCode: r.employeeCode,
+        photoAvailable: r.photoAvailable,
+        employeeProcess: r.employeeProcess,
+      }),
+    ),
+  };
 }
 
 /** Employee: their OWN payroll only. Never calculates — read-only. */
@@ -970,8 +1131,16 @@ export async function payrollBreakdown(
     notes.push("Proration is not applied — the proration basis (denominator) is not configured.");
   }
   notes.push("Unpaid-leave deduction = ₹0: no per-day unpaid-leave rate is defined.");
-  notes.push("Off deduction = ₹0: no monetary value for an Off is defined.");
+  notes.push("Off deduction = ₹0: Late/Short → Off conversion is disabled (Admin UAT §5).");
   notes.push("Overtime amount = ₹0: no overtime rate is configured.");
+  if (run) {
+    notes.push(
+      `Late Units = ${run.lateUnits} (${run.lateShortCount} Short Late × 1.0 + ${run.lateFullCount} Late × 1.5). ` +
+        (Number(run.lateDeduction) > 0
+          ? `≥ 3 → one day's salary cut of ₹${run.lateDeduction} (base ÷ actual calendar days of ${run.periodMonth}) and no ₹1,000 regularity bonus.`
+          : "< 3 → no late-driven salary cut."),
+    );
+  }
 
   return {
     payroll: run ? payrollDTO(run) : null,

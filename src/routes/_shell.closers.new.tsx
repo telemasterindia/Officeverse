@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { CheckCircle2, UserPlus } from "lucide-react";
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
@@ -14,57 +14,103 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { PageHeader, SectionCard } from "@/components/officeverse/primitives";
-import { PhotoPickerField } from "@/components/officeverse/identity-controls";
 import { RoleGate } from "@/components/officeverse/role-gate";
 import { PROCESSES } from "@/lib/officeverse/data";
-import { setEmployeePhoto } from "@/lib/officeverse/identity";
-import { createPerson, PERSON_STATUSES, type PersonRecord } from "@/lib/officeverse/people";
 import { shiftDateIST } from "@/lib/officeverse/shift";
+import { fileToSquareJpegBase64 } from "@/lib/officeverse/use-photo";
+import { useCreateServerStaff, type StaffKind } from "@/lib/officeverse/use-staff";
+import type { StaffDTO } from "@/server/staff/service";
 import type { ProcessCode } from "@/lib/officeverse/types";
 
 export const Route = createFileRoute("/_shell/closers/new")({
-  head: () => ({ meta: [{ title: "Create Closer — TeleMaster India" }] }),
+  head: () => ({ meta: [{ title: "Create Closer — TMI Officeverse CRM" }] }),
   component: () => (
-    <RoleGate allow={["admin"]}>
+    <RoleGate allow={["admin", "hr"]}>
       <CreateCloserPage />
     </RoleGate>
   ),
 });
 
+const STATUS: { value: string; label: string }[] = [
+  { value: "active", label: "Active" },
+  { value: "inactive", label: "Inactive" },
+  { value: "suspended", label: "Suspended" },
+  { value: "on_leave", label: "On leave" },
+];
+
+const KIND: StaffKind = "closer";
+
 function CreateCloserPage() {
   const [process, setProcess] = useState<ProcessCode>("US");
-  const [status, setStatus] = useState<PersonRecord["status"]>("Active");
-  const [photo, setPhoto] = useState<string | null>(null);
-  const [created, setCreated] = useState<PersonRecord | null>(null);
+  const [status, setStatus] = useState("active");
+  const [created, setCreated] = useState<StaffDTO | null>(null);
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
+  const createM = useCreateServerStaff();
+
+  useEffect(() => {
+    return () => {
+      if (photoPreview) URL.revokeObjectURL(photoPreview);
+    };
+  }, [photoPreview]);
+
+  const onPhotoChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    setPhotoPreview((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return f && f.type.startsWith("image/") ? URL.createObjectURL(f) : null;
+    });
+  };
 
   const reset = () => {
     setCreated(null);
-    setPhoto(null);
-    setStatus("Active");
+    setStatus("active");
     setProcess("US");
+    setPhotoPreview((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
     formRef.current?.reset();
   };
 
-  const submit = (e: FormEvent<HTMLFormElement>) => {
+  const submit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    if (createM.isPending) return;
     const fd = new FormData(e.currentTarget);
     const s = (k: string) => String(fd.get(k) ?? "").trim();
     if (!s("full_name") || !s("email") || !s("password")) return;
-    const rec = createPerson({
-      kind: "closer",
-      full_name: s("full_name"),
-      email: s("email"),
-      password: s("password"),
-      phone: s("phone"),
-      dob: s("dob"),
-      ...(s("registered_on") ? { registered_on: s("registered_on") } : {}),
-      status,
-      process,
-    });
-    if (photo) setEmployeePhoto(rec.full_name, photo);
-    toast.success("Closer created", { description: `${rec.full_name} · ${rec.id}` });
-    setCreated(rec);
+
+    let photo_base64: string | undefined;
+    const photoFile = fd.get("photo");
+    if (photoFile instanceof File && photoFile.size > 0) {
+      try {
+        photo_base64 = await fileToSquareJpegBase64(photoFile);
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "That photo could not be processed");
+        return;
+      }
+    }
+
+    try {
+      const res = await createM.mutateAsync({
+        kind: KIND,
+        full_name: s("full_name"),
+        email: s("email"),
+        password: s("password"),
+        process,
+        status,
+        ...(s("phone") ? { phone: s("phone") } : {}),
+        ...(s("dob") ? { dob: s("dob") } : {}),
+        ...(s("registered_on") ? { registered_on: s("registered_on") } : {}),
+        ...(photo_base64 ? { photo_base64 } : {}),
+      });
+      toast.success(`Closer created — ID ${res.staff.code}`, {
+        description: res.staff.full_name,
+      });
+      setCreated(res.staff);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not create the closer");
+    }
   };
 
   return (
@@ -78,7 +124,7 @@ function CreateCloserPage() {
         </Link>
         <PageHeader
           title="Create closer"
-          description="Register a new closer. A Closer is a separate role from an Agent."
+          description="Register a new closer — this creates their real login and profile. A Closer is a separate role from an Agent and works on incentives, not a fixed monthly wage."
         />
       </div>
 
@@ -133,41 +179,70 @@ function CreateCloserPage() {
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="password">Password *</Label>
+              <Label htmlFor="password">Temporary password *</Label>
               <Input
                 id="password"
                 name="password"
                 type="password"
                 autoComplete="new-password"
-                placeholder="Set a login password"
+                placeholder="Min 8 characters — they must change it at first login"
+                minLength={8}
                 required
               />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="status">Status</Label>
-              <Select value={status} onValueChange={(v) => setStatus(v as PersonRecord["status"])}>
+              <Select value={status} onValueChange={setStatus}>
                 <SelectTrigger id="status">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {PERSON_STATUSES.map((s) => (
-                    <SelectItem key={s} value={s}>
-                      {s}
+                  {STATUS.map((s) => (
+                    <SelectItem key={s.value} value={s.value}>
+                      {s.label}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-1.5 sm:col-span-2">
-              <Label>Profile picture</Label>
-              <PhotoPickerField value={photo} onChange={setPhoto} />
+              <Label htmlFor="photo">Official profile photo</Label>
+              <div className="flex items-center gap-3">
+                <div className="grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-full border border-border bg-muted text-xs text-muted-foreground">
+                  {photoPreview ? (
+                    <img
+                      src={photoPreview}
+                      alt="Selected profile photo preview"
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    "No photo"
+                  )}
+                </div>
+                <Input
+                  id="photo"
+                  name="photo"
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  onChange={onPhotoChange}
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Set by Admin / HR only. Cropped to a square and compressed in your browser before
+                upload (max 5&nbsp;MB). The closer cannot change it later.
+              </p>
             </div>
           </div>
         </SectionCard>
 
         <div className="flex justify-end">
-          <Button type="submit" className="rounded-lg px-6 py-5 text-base font-semibold">
-            <UserPlus className="mr-2 h-4 w-4" /> Create closer
+          <Button
+            type="submit"
+            disabled={createM.isPending}
+            className="rounded-lg px-6 py-5 text-base font-semibold"
+          >
+            <UserPlus className="mr-2 h-4 w-4" />{" "}
+            {createM.isPending ? "Creating…" : "Create closer"}
           </Button>
         </div>
       </form>
@@ -175,16 +250,28 @@ function CreateCloserPage() {
       <Dialog open={created != null} onOpenChange={(v) => !v && reset()}>
         <DialogContent className="max-w-sm rounded-2xl text-center">
           <div className="py-4">
-            <span
-              className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-success/12 text-success"
-              aria-hidden
-            >
-              <CheckCircle2 className="h-6 w-6" />
-            </span>
+            {photoPreview ? (
+              <img
+                src={photoPreview}
+                alt={`${created?.full_name ?? "Closer"} photo`}
+                className="mx-auto h-20 w-20 rounded-full border border-border object-cover"
+              />
+            ) : (
+              <span
+                className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-success/12 text-success"
+                aria-hidden
+              >
+                <CheckCircle2 className="h-6 w-6" />
+              </span>
+            )}
             <h2 className="mt-4 font-display text-xl font-bold">Closer created</h2>
-            <p className="mt-2 text-sm text-muted-foreground">
-              {created?.full_name} · {created?.id}
-            </p>
+            <div className="mx-auto mt-2 w-fit rounded-lg bg-muted px-3 py-1.5">
+              <span className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                Closer ID
+              </span>
+              <div className="font-mono text-base font-bold tabular-nums">{created?.code}</div>
+            </div>
+            <p className="mt-2 text-sm text-muted-foreground">{created?.full_name}</p>
             <div className="mt-6 flex flex-col gap-2">
               <Button asChild className="rounded-lg">
                 <Link to="/closers">Go to Closer list</Link>

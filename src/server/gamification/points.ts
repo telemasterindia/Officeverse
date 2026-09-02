@@ -95,6 +95,28 @@ export function reversalDedupeKey(originalTxnId: number): string {
   return `REVERSAL:${Math.max(0, Math.trunc(originalTxnId))}`;
 }
 
+/**
+ * Award-once key for the open-ended Scoring Engine (Phase 2+). Distinct from
+ * `dedupeKeyFor` so that N different scoring rules may each score one event
+ * exactly once, while the SAME rule can never score the same event twice:
+ *
+ *   <event>:<sourceType>:<sourceId>:rule:<ruleId>:v<ruleVersion>
+ *
+ * The legacy `dedupeKeyFor` above is unchanged and still owns the pre-engine
+ * `<event>:<referenceType>:<referenceId>` space, so the two never collide.
+ */
+export function scoredDedupeKey(
+  event: string,
+  sourceType: string | null | undefined,
+  sourceId: string | number | null | undefined,
+  ruleId: number,
+  ruleVersion: number,
+): string {
+  return `${slug(event) || "none"}:${slug(sourceType) || "none"}:${slug(sourceId) || "none"}:rule:${Math.trunc(
+    ruleId,
+  )}:v${Math.trunc(ruleVersion)}`;
+}
+
 /* ---------------------- total from the ledger -------------------- */
 
 export interface LedgerRowLike {

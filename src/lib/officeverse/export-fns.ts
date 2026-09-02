@@ -11,7 +11,7 @@
  */
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { requireRole, requestInfo } from "@/server/context";
+import { requireRole, requireUser, requestInfo } from "@/server/context";
 import * as svc from "@/server/export/service";
 
 const DATASETS = [
@@ -67,4 +67,23 @@ export const exportDownloadFn = createServerFn({ method: "POST" })
   .handler(async ({ data }): Promise<svc.ExportFile> => {
     const user = await requireRole("admin");
     return svc.runExport(user, data, requestInfo());
+  });
+
+/**
+ * Admin UAT §12 — self-service export of one's OWN leads / follow-ups.
+ * Admin + HR (all) and Closer (own). AGENTS are rejected server-side. The
+ * client picks only the dataset + format; the row scope comes from the session.
+ */
+export const exportMyLeadsFn = createServerFn({ method: "POST" })
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        dataset: z.enum(["leads", "followups"]).default("leads"),
+        format: z.enum(["xlsx", "csv"]),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }): Promise<svc.ExportFile> => {
+    const user = await requireUser();
+    return svc.runMyExport(user, data, requestInfo());
   });

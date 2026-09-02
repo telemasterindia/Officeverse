@@ -23,14 +23,14 @@ const PROCS = ["", "US", "UK", "IN", "AU"];
 
 function OfficeNetworksPage() {
   const { user } = useSession();
-  if (user?.role !== "admin" && user?.role !== "hr") {
+  if (user?.role !== "admin") {
     return (
       <div className="space-y-6">
         <PageHeader title="Authorized Office Networks" description="Manage office IP ranges." />
         <EmptyState
           emoji="🔒"
-          title="HR / Admin only"
-          message="This area is restricted to HR and Admin."
+          title="Admin only"
+          message="IP / office-network configuration is restricted to Admin. The server also rejects any non-Admin request."
         />
       </div>
     );

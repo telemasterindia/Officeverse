@@ -117,13 +117,22 @@ export interface MonthlyPayrollInput {
   activeOffDays?: number;
   approvedOvertimeMinutes?: number;
   /** already-resolved deduction/earning amounts in RUPEES (service supplies 0
-   *  until the business rate exists). unpaidLeaveDeduction / offDeduction are
-   *  positive numbers that REDUCE gross; overtimeAmount / adjustmentsTotal are
-   *  signed and ADD to gross. */
+   *  until the business rate exists). unpaidLeaveDeduction / offDeduction /
+   *  lateDeduction are positive numbers that REDUCE gross; overtimeAmount /
+   *  adjustmentsTotal are signed and ADD to gross. */
   unpaidLeaveDeduction?: number;
   offDeduction?: number;
   overtimeAmount?: number;
   adjustmentsTotal?: number;
+  /* -- Admin UAT Batch-2 §5 — Late-Units (see ./late-units.ts) -- *
+   * The 1-day salary cut when monthly Late Units ≥ 3. `lateDeduction` is an
+   * already-resolved positive RUPEE amount that REDUCES gross; the three counts
+   * are snapshot / provenance only and never change the amount here. Absent /
+   * 0 → the Phase-13/16 result is byte-for-byte unchanged. */
+  lateShortCount?: number;
+  lateFullCount?: number;
+  lateUnits?: number;
+  lateDeduction?: number;
 }
 
 export interface MonthlyPayrollResult {
@@ -143,6 +152,11 @@ export interface MonthlyPayrollResult {
   approvedOvertimeMinutes: number;
   overtimeAmount: string;
   adjustmentsTotal: string;
+  /* -- Admin UAT Batch-2 §5 — Late-Units snapshot -- */
+  lateShortCount: number;
+  lateFullCount: number;
+  lateUnits: number;
+  lateDeduction: string;
   /** gross before statutory deductions */
   calculatedSalary: string;
   calculationVersion: string;
@@ -159,6 +173,7 @@ export function calculateMonthlyPayroll(input: MonthlyPayrollInput): MonthlyPayr
   for (const [k, v] of [
     ["unpaidLeaveDeduction", input.unpaidLeaveDeduction],
     ["offDeduction", input.offDeduction],
+    ["lateDeduction", input.lateDeduction],
   ] as const) {
     if (v != null && (!Number.isFinite(v) || v < 0)) {
       throw new Error(`${k} must be a finite number >= 0`);
@@ -176,6 +191,7 @@ export function calculateMonthlyPayroll(input: MonthlyPayrollInput): MonthlyPayr
   const regularityBonusPaise = toPaise(Math.trunc(input.regularityBonus)); // ₹ integer
   const unpaidDeductionPaise = toPaise(input.unpaidLeaveDeduction ?? 0);
   const offDeductionPaise = toPaise(input.offDeduction ?? 0);
+  const lateDeductionPaise = toPaise(input.lateDeduction ?? 0);
   const overtimePaise = toSignedPaise(input.overtimeAmount ?? 0);
   const adjustmentsPaise = toSignedPaise(input.adjustmentsTotal ?? 0);
 
@@ -186,7 +202,13 @@ export function calculateMonthlyPayroll(input: MonthlyPayrollInput): MonthlyPayr
     adjustmentsPaise,
     -unpaidDeductionPaise,
     -offDeductionPaise,
+    -lateDeductionPaise,
   );
+
+  const lateUnitsSnapshot =
+    Math.round(
+      Math.max(0, Number.isFinite(input.lateUnits ?? 0) ? (input.lateUnits ?? 0) : 0) * 10,
+    ) / 10;
 
   return {
     month: input.month,
@@ -205,6 +227,10 @@ export function calculateMonthlyPayroll(input: MonthlyPayrollInput): MonthlyPayr
     approvedOvertimeMinutes: Math.max(0, Math.trunc(input.approvedOvertimeMinutes ?? 0)),
     overtimeAmount: paiseToAmount(overtimePaise),
     adjustmentsTotal: paiseToAmount(adjustmentsPaise),
+    lateShortCount: Math.max(0, Math.trunc(input.lateShortCount ?? 0)),
+    lateFullCount: Math.max(0, Math.trunc(input.lateFullCount ?? 0)),
+    lateUnits: lateUnitsSnapshot,
+    lateDeduction: paiseToAmount(lateDeductionPaise),
     calculatedSalary: paiseToAmount(grossPaise < 0 ? 0 : grossPaise),
     calculationVersion: PAYROLL_CALC_VERSION_V2,
   };

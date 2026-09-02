@@ -63,23 +63,29 @@ describe("Assignment Control — the follow-up / lead ownership invariant is str
     expect(fn).not.toMatch(/ownerUserId/);
   });
 
-  it("the AGENT_FOLLOWUPS / CLOSER_FOLLOWUPS service path calls only the follow-up writer", () => {
-    // the follow-up branch begins after the CLOSER_LEADS `if` block returns
-    const branch = svcSrc.slice(
-      svcSrc.indexOf("/* ---- AGENT_FOLLOWUPS / CLOSER_FOLLOWUPS ---- */"),
-    );
+  // the follow-up branch header (§8 added CLOSER_FOLLOWUPS_TO_AGENT to it)
+  const FU_BRANCH_MARK = "/* ---- AGENT_FOLLOWUPS / CLOSER_FOLLOWUPS";
+
+  it("the follow-up service path calls only the follow-up writer (never the lead writer)", () => {
+    const at = svcSrc.indexOf(FU_BRANCH_MARK);
+    expect(at).toBeGreaterThan(-1);
+    const branch = stripComments(svcSrc.slice(at));
     expect(branch).toMatch(/repo\.reassignFollowupOwner\(/);
     expect(branch).not.toMatch(/repo\.reassignLeadCloser\(/);
+    // §5/§11 — writes the immutable trail, never touches leads.assignedCloserId
+    expect(branch).toMatch(/repo\.insertFollowupReassignments\(/);
+    expect(branch).not.toMatch(/assignedCloserId/);
   });
 
   it("the CLOSER_LEADS service path calls only the lead writer + appends history (never deletes)", () => {
     const branch = svcSrc.slice(
       svcSrc.indexOf("/* ---- CLOSER_LEADS ---- */"),
-      svcSrc.indexOf("/* ---- AGENT_FOLLOWUPS / CLOSER_FOLLOWUPS ---- */"),
+      svcSrc.indexOf(FU_BRANCH_MARK),
     );
     expect(branch).toMatch(/repo\.reassignLeadCloser\(/);
     expect(branch).toMatch(/repo\.insertLeadAssignmentHistory\(/);
     expect(branch).not.toMatch(/repo\.reassignFollowupOwner\(/);
+    expect(branch).not.toMatch(/repo\.insertFollowupReassignments\(/);
     expect(branch).not.toMatch(/\.delete\(/);
   });
 
@@ -102,6 +108,29 @@ describe("Assignment Control — the follow-up / lead ownership invariant is str
     expect(svcSrc).toMatch(/repo\.roleOfUser\(input\.toOwnerId/);
     expect(svcSrc).toMatch(/"bad_destination"/);
   });
+
+  it("bulk reassignment is blocked across the US ⇄ India process line (even for an admin)", () => {
+    // source + destination process are resolved and compared before any write
+    expect(svcSrc).toMatch(/repo\.processOfUser\(input\.fromOwnerId/);
+    expect(svcSrc).toMatch(/repo\.processOfUser\(input\.toOwnerId/);
+    expect(svcSrc).toMatch(/repo\.processOfCloser\(input\.fromOwnerId/);
+    expect(svcSrc).toMatch(/repo\.processOfCloser\(input\.toOwnerId/);
+    expect(svcSrc).toMatch(/fromProcess !== toProcess/);
+    expect(svcSrc).toMatch(/"cross_process"/);
+    // and the guard sits before the reassignment work (before either writer)
+    const guardAt = svcSrc.indexOf('"cross_process"');
+    expect(guardAt).toBeGreaterThan(-1);
+    expect(guardAt).toBeLessThan(svcSrc.indexOf("repo.reassignLeadCloser("));
+    expect(guardAt).toBeLessThan(svcSrc.indexOf("repo.reassignFollowupOwner("));
+  });
+
+  it("processOfUser / processOfCloser read users.process (via the closer's user)", () => {
+    expect(repoSrc).toMatch(/export async function processOfUser/);
+    expect(repoSrc).toMatch(/export async function processOfCloser/);
+    const poc = repoSrc.slice(repoSrc.indexOf("export async function processOfCloser"));
+    expect(poc).toMatch(/\.from\(closers\)/);
+    expect(poc).toMatch(/innerJoin\(users,/);
+  });
 });
 
 describe("Assignment Control — client trust boundary", () => {
@@ -109,7 +138,7 @@ describe("Assignment Control — client trust boundary", () => {
 
   it("every exported server fn derives identity via requireUser()", () => {
     const handlers = fns.split(/export const \w+Fn/).slice(1);
-    expect(handlers).toHaveLength(4);
+    expect(handlers).toHaveLength(5); // + longDatedFollowUpsFn (§6)
     for (const h of handlers) expect(h).toMatch(/requireUser\(\)/);
   });
 

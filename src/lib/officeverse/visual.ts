@@ -45,7 +45,6 @@ export function roomForPath(pathname: string): RoomKey {
 
 /** Door glyph per existing route. Keyed by the exact `to` values already in nav.ts. */
 export const DOOR_EMOJI: Record<string, string> = {
-  "/avatar-studio": "🎨",
   "/workspace": "🎯",
   "/leads": "🗂️",
   "/leads/new": "✨",

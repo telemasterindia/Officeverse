@@ -25,6 +25,9 @@ export interface LeadDTO {
   comment: string | null;
   status: Lead["status"];
   source: Lead["source"];
+  /** the lead's process (from its agent, else its assigned closer) — used to
+   *  scope the "assign / reassign closer" picker to eligible closers. */
+  process: string | null;
   agent_code: string | null;
   agent_name: string | null;
   assigned_closer_code: string | null;
@@ -39,6 +42,7 @@ export interface LeadDTOMeta {
   agentName?: string | null;
   closerCode?: string | null;
   closerName?: string | null;
+  process?: string | null;
 }
 
 export function toLeadDTO(row: Lead, meta: LeadDTOMeta = {}): LeadDTO {
@@ -59,6 +63,7 @@ export function toLeadDTO(row: Lead, meta: LeadDTOMeta = {}): LeadDTO {
     comment: row.comments ?? null,
     status: row.status,
     source: row.source,
+    process: meta.process ?? null,
     agent_code: meta.agentCode ?? null,
     agent_name: meta.agentName ?? null,
     assigned_closer_code: meta.closerCode ?? null,

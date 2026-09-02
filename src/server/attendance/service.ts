@@ -24,11 +24,27 @@ import {
   assertValidOverride,
   type OverrideClass,
 } from "../authz/attendance";
-import { classifyAttendance, LATE_RULES } from "./classify";
+import { classifyAttendance, LATE_RULES, type ShiftOverrideInput } from "./classify";
 import { mergedMinutes, type Interval } from "./merge";
 import * as repo from "../db/repos/attendance";
+import * as shiftRepo from "../db/repos/shift-overrides";
 import { istWallClockToEpochMs, nowIST } from "../time";
-import type { Attendance, NewAttendance, User } from "@/lib/db/schema";
+import type { Attendance, NewAttendance, ShiftOverride, User } from "@/lib/db/schema";
+
+/** Admin UAT Batch-2 follow-up §1 — a shift_overrides row → the pure classifier
+ *  input. Blank optional boundaries fall through to the derived defaults. */
+export function shiftOverrideToClassifier(
+  row: ShiftOverride | undefined | null,
+): ShiftOverrideInput | null {
+  if (!row) return null;
+  return {
+    startHHMM: row.startHhmm,
+    endHHMM: row.endHhmm,
+    reportingHHMM: row.reportingHhmm ?? null,
+    shortLateFromHHMM: row.shortLateFromHhmm ?? null,
+    lateFromHHMM: row.lateFromHhmm ?? null,
+  };
+}
 
 const TRACKED_ROLES = new Set<User["role"]>(["agent", "closer"]);
 
@@ -57,6 +73,10 @@ export async function touchAttendance(
 ): Promise<void> {
   const process = user.process as ProcessCode;
   const nowMs = istWallClockToEpochMs(nowWall);
+  // `touchAttendance` ONLY ever recomputes the CURRENT operational date — a
+  // shift override added later for a different date can never rewrite an
+  // earlier day's attendance. Retroactive application is an explicit, audited
+  // Admin action (`recomputeAttendanceForDate`).
   const operationalDate = shiftDateIST(nowMs, process);
 
   const throttleKey = `${user.id}:${operationalDate}`;
@@ -64,10 +84,31 @@ export async function touchAttendance(
   if (prev && nowMs - prev < TOUCH_THROTTLE_MS) return;
   lastTouch.set(throttleKey, nowMs);
 
+  await deriveAttendanceForDate(user, process, operationalDate, nowWall);
+}
+
+/**
+ * Derive (insert or update) one (user, operational date) attendance row from the
+ * user's attendance-eligible sessions, classified against the EFFECTIVE shift
+ * for that date (Admin override when present, else the frozen default). Never
+ * touches a `source = "corrected"` row. Pure of throttling / role gates — the
+ * callers own those.
+ */
+export async function deriveAttendanceForDate(
+  user: Pick<User, "id" | "role">,
+  process: ProcessCode,
+  operationalDate: string,
+  nowWall: string = nowIST(),
+): Promise<void> {
   const db = getDb();
+  const nowMs = istWallClockToEpochMs(nowWall);
 
   const existing = await repo.getByUserAndDate(user.id, operationalDate, db);
   if (existing?.source === "corrected") return; // never clobber a manual correction
+
+  const shiftOverride = shiftOverrideToClassifier(
+    await shiftRepo.getShiftOverride(process, operationalDate, db),
+  );
 
   // all of this user's sessions whose check-in maps to THIS operational date.
   // Phase 23: ONLY attendance-eligible sessions (office-network logins of an
@@ -90,7 +131,7 @@ export async function touchAttendance(
   );
   if (daySessions.length === 0) return;
 
-  const cls = classifyAttendance({ process, operationalDate });
+  const cls = classifyAttendance({ process, operationalDate, shiftOverride });
   const startMs = istWallClockToEpochMs(cls.shiftStartAt);
   const endMs = istWallClockToEpochMs(cls.shiftEndAt);
 
@@ -112,7 +153,13 @@ export async function touchAttendance(
 
   const firstCheckInAt = wallOf(firstInMs);
   const lastCheckOutAt = wallOf(lastOutMs);
-  const finalCls = classifyAttendance({ process, operationalDate, firstCheckInAt, lastCheckOutAt });
+  const finalCls = classifyAttendance({
+    process,
+    operationalDate,
+    firstCheckInAt,
+    lastCheckOutAt,
+    shiftOverride,
+  });
   const totalMinutes = mergedMinutes(intervals);
 
   const derived: Partial<NewAttendance> = {
@@ -163,7 +210,11 @@ function shiftLabel(p: ProcessCode): string {
 
 export interface AttendanceDTO {
   id: number;
+  userId?: number;
   employeeName?: string;
+  /** current canonical Employee ID (agents.agent_code / closers.closer_code) */
+  employeeCode?: string | null;
+  photoAvailable?: boolean;
   role: string;
   process: string;
   shiftName: string;
@@ -198,12 +249,20 @@ function lateClassOf(a: Attendance): AttendanceDTO["lateClass"] {
   return "PENDING";
 }
 
-function toDTO(a: Attendance, employeeName?: string): AttendanceDTO {
+function toDTO(
+  a: Attendance,
+  employeeName?: string,
+  extra?: { employeeCode?: string | null; photoAvailable?: boolean; employeeProcess?: string },
+): AttendanceDTO {
   return {
     id: a.id,
+    userId: a.userId,
     ...(employeeName ? { employeeName } : {}),
+    ...(extra?.employeeCode !== undefined ? { employeeCode: extra.employeeCode } : {}),
+    ...(extra?.photoAvailable !== undefined ? { photoAvailable: extra.photoAvailable } : {}),
     role: a.role,
-    process: a.process,
+    // the employee's CURRENT process where the list path provides it
+    process: extra?.employeeProcess ?? a.process,
     shiftName: a.shiftName,
     operationalDate: a.operationalDate,
     reportingAt: a.reportingAt,
@@ -279,7 +338,17 @@ export async function listManagedAttendance(
     status: f.status,
   });
   // manager operational view = AGENT rows only (never closer/admin/hr rows)
-  return { rows: rows.filter((r) => r.role === "agent").map((r) => toDTO(r, r.employeeName)) };
+  return {
+    rows: rows
+      .filter((r) => r.role === "agent")
+      .map((r) =>
+        toDTO(r, r.employeeName, {
+          employeeCode: r.employeeCode,
+          photoAvailable: r.photoAvailable,
+          employeeProcess: r.employeeProcess,
+        }),
+      ),
+  };
 }
 
 export interface AdminAttendanceFilters {
@@ -323,7 +392,15 @@ export async function listAllAttendance(
     shiftName: f.shiftName,
     status: f.status,
   });
-  return { rows: rows.map((r) => toDTO(r, r.employeeName)) };
+  return {
+    rows: rows.map((r) =>
+      toDTO(r, r.employeeName, {
+        employeeCode: r.employeeCode,
+        photoAvailable: r.photoAvailable,
+        employeeProcess: r.employeeProcess,
+      }),
+    ),
+  };
 }
 
 /* ---------------------------- correction ---------------------------- */

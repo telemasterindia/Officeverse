@@ -428,7 +428,13 @@ async function queryStaff(kind: "agents" | "closers", f: ExportFilters): Promise
   const crCol = isAgent ? agents.createdAt : closers.createdAt;
   const joinKey = isAgent ? agents.userId : closers.userId;
 
-  const conds: SQL[] = [];
+  // The staff-roster export resolves CURRENT identity, exactly like Agent List /
+  // Staff Directory / Assignments (repos/staff.listStaffRows, repos/assignments
+  // .listAgentRoster/.listCloserRoster) — all keyed on `users.role`. Without this
+  // predicate a promoted Agent→Closer keeps a historical `agents` row and would
+  // still surface in the Agents export carrying a STALE `agent_code`; the role
+  // filter keeps each person in exactly one roster with their live code.
+  const conds: SQL[] = [eq(users.role, isAgent ? "agent" : "closer")];
   const field = f.dateField ?? "registered";
   if (field === "created") conds.push(...range(crCol, f.dateFrom, f.dateTo));
   else conds.push(...range(regCol, f.dateFrom, f.dateTo, false));

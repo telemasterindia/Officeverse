@@ -19,14 +19,19 @@ describe("business codes preserve existing conventions", () => {
   it("formats each code type", () => {
     expect(leadCode(12007)).toBe("TMI_00012007");
     expect(followUpCode(4415)).toBe("FU_00004415");
-    expect(agentCode(1)).toBe("AG-00001");
-    expect(closerCode(3)).toBe("CL-00003");
+    // canonical Employee IDs — Agent "TMI_CC_###", Closer "TMI_CL_###"
+    expect(agentCode(1)).toBe("TMI_CC_001");
+    expect(agentCode(42)).toBe("TMI_CC_042");
+    expect(agentCode(128)).toBe("TMI_CC_128");
+    expect(closerCode(3)).toBe("TMI_CL_003");
+    expect(closerCode(128)).toBe("TMI_CL_128");
     expect(clientCode(12)).toBe("CLT-00012");
   });
   it("numericPart is the inverse of the code formatters", () => {
     expect(numericPart("TMI_00012007")).toBe(12007);
     expect(numericPart("FU_00004415")).toBe(4415);
-    expect(numericPart("AG-00042")).toBe(42);
+    expect(numericPart("AG-00042")).toBe(42); // legacy agent code still parses
+    expect(numericPart("TMI_CC042")).toBe(42);
     expect(numericPart(leadCode(987654))).toBe(987654);
   });
 });

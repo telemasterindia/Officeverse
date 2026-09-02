@@ -22,12 +22,18 @@ export function useMyPhotoMeta() {
   });
 }
 
-/** The caller's own photo bytes (or an authorised employee's, for Admin/HR). */
-export function useProfilePhoto(userId?: number) {
+/**
+ * The caller's own photo bytes (or an authorised employee's, for Admin/HR).
+ * Pass `{ enabled: false }` to hold the request — used by list rows that only
+ * fetch a co-worker's photo when the viewer is actually allowed to (Admin/HR,
+ * or their own row) so a non-manager never fires a request the server would 403.
+ */
+export function useProfilePhoto(userId?: number, opts: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: ["photo", "bytes", userId ?? "me"],
     queryFn: () => profilePhotoFn({ data: userId ? { userId } : {} }),
     staleTime: 60_000,
+    enabled: opts.enabled ?? true,
   });
 }
 

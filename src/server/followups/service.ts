@@ -16,6 +16,7 @@ import {
   assertCanReadFollowUp,
   assertCanRescheduleFollowUp,
   assertCanUpdateFollowUpCustomer,
+  assertFollowUpsModuleAccess,
   canTransition,
   conversionOwnershipPlan,
   filterCustomerPatch,
@@ -31,21 +32,26 @@ import {
   currentShiftDate,
   nowIST,
   toScheduledWallClock,
+  wallToIstIso,
 } from "../time";
 import { toFollowUpDTO, type FollowUpDTO } from "./dto";
 import { toLeadDTO, type LeadDTO } from "../leads/dto";
 import * as repo from "../db/repos/followups";
 import * as leadsRepo from "../db/repos/leads";
+import * as assignmentsRepo from "../db/repos/assignments";
 import {
+  getAgentByCode,
   getAgentByUserId,
   getCloserByCode,
   getCloserByUserId,
+  getCloserWithUserByCode,
   loadAgentMeta,
   loadCloserMeta,
+  staffUserIdsByProcess,
 } from "../db/repos/staff";
 import { getDb } from "@/lib/db";
 import { users } from "@/lib/db/schema";
-import { inArray } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import type { FollowUp, NewFollowUp, User } from "@/lib/db/schema";
 import type {
   CreateFollowUpInput,
@@ -110,14 +116,35 @@ export async function listFollowUps(
   user: User,
   input: ListFollowUpsInput,
 ): Promise<ListFollowUpsResult> {
+  assertFollowUpsModuleAccess(user.role);
   const scope = followUpScope(actorOf(user));
   const now = nowIST();
   const todayEnd = `${addDaysYMD(calendarTodayIST(), 1)} 00:00:00`;
 
   const ownerUserId = scope.kind === "owner" ? scope.ownerUserId : (input.ownerUserId ?? undefined);
 
+  // Admin-only filters (Admin UAT §3/§4). Resolved SERVER-SIDE from codes /
+  // process — never trusted from the client. Ignored for a scoped (owner) view.
+  let ownerRole: "agent" | "closer" | undefined;
+  let ownerUserIdIn: number[] | undefined;
+  if (scope.kind !== "owner" && user.role === "admin") {
+    if (input.agentCode) {
+      const a = await getAgentByCode(input.agentCode);
+      ownerRole = "agent";
+      ownerUserIdIn = [a?.userId ?? -1];
+    } else if (input.closerCode) {
+      const c = await getCloserByCode(input.closerCode);
+      ownerRole = "closer";
+      ownerUserIdIn = [c?.userId ?? -1];
+    } else if (input.process) {
+      ownerUserIdIn = await staffUserIdsByProcess(input.process);
+    }
+  }
+
   const { rows, total } = await repo.listFollowUps({
     ownerUserId,
+    ...(ownerRole ? { ownerRole } : {}),
+    ...(ownerUserIdIn ? { ownerUserIdIn } : {}),
     status: input.status as FollowUp["status"] | undefined,
     bucket: input.bucket,
     nowWall: now,
@@ -150,17 +177,32 @@ async function loadForRead(user: User, code: string): Promise<FollowUp> {
 }
 
 export async function getFollowUp(user: User, code: string): Promise<FollowUpDTO> {
+  assertFollowUpsModuleAccess(user.role);
   return hydrateOne(await loadForRead(user, code));
 }
 
 export async function getFollowUpHistory(user: User, code: string) {
+  assertFollowUpsModuleAccess(user.role);
   const row = await loadForRead(user, code);
   const attempts = await repo.listAttempts(row.id);
+  // §5 — the Admin follow-up-reassignment trail (previous owner / reassigned by
+  // / new owner / when / reason). Immutable; part of the complete history.
+  const reassignments = await assignmentsRepo.listFollowupReassignments(row.id);
   return {
     follow_up_id: row.followUpCode,
     status: row.status,
     attempts: (await hydrateOne(row)).attempts,
     count: attempts.length,
+    reassignments: reassignments.map((r) => ({
+      id: r.id,
+      from_owner_name: r.fromOwnerName,
+      from_owner_role: r.fromOwnerRole,
+      to_owner_name: r.toOwnerName,
+      to_owner_role: r.toOwnerRole,
+      reassigned_by_name: r.reassignedByName,
+      reason: r.reason,
+      at: wallToIstIso(r.createdAt),
+    })),
   };
 }
 
@@ -192,7 +234,12 @@ export async function createFollowUp(
   assertCanCreateFollowUp(actor);
 
   const ownerRole: FollowUp["ownerRole"] = user.role === "closer" ? "closer" : "agent";
-  const captureDate = input.date ?? currentShiftDate(user.process);
+  // UAT #5: an Agent never picks the capture date — it is their operational
+  // shift date, derived server-side. Any client `date` is ignored for agents.
+  const captureDate =
+    user.role === "agent"
+      ? currentShiftDate(user.process)
+      : (input.date ?? currentShiftDate(user.process));
   const scheduledAt = toScheduledWallClock(input.scheduled_date, input.scheduled_time);
   const now = nowIST();
 
@@ -504,14 +551,30 @@ export async function convertFollowUpToLead(
     if (!closerDecision.ok) {
       throw new HttpError(400, closerDecision.reason, closerDecision.code);
     }
-    const targetCloser = await getCloserByCode(toCloserCode!);
+    const targetCloser = await getCloserWithUserByCode(toCloserCode!);
     if (!targetCloser) {
       throw new HttpError(404, `Closer ${toCloserCode} not found`, "closer_not_found");
     }
+    // Process isolation (audit H-1): the chosen closer must be in the same
+    // process as the follow-up owner (= the resulting lead's process).
+    const ownerProcess = (
+      await getDb()
+        .select({ p: users.process })
+        .from(users)
+        .where(eq(users.id, preRow.ownerUserId))
+        .limit(1)
+    )[0]?.p;
+    if (ownerProcess && targetCloser.user.process !== ownerProcess) {
+      throw new HttpError(
+        422,
+        `Closer ${toCloserCode} is in the ${targetCloser.user.process} process — this ${ownerProcess} follow-up can only convert to a ${ownerProcess} closer`,
+        "cross_process",
+      );
+    }
     originatingAgentId = ownerAgent.id;
-    responsibleCloserId = targetCloser.id;
-    responsibleCloserCode = targetCloser.closerCode;
-    responsibleCloserUserId = targetCloser.userId;
+    responsibleCloserId = targetCloser.closer.id;
+    responsibleCloserCode = targetCloser.closer.closerCode;
+    responsibleCloserUserId = targetCloser.closer.userId;
   } else {
     // Closer conversion — the SAME closer keeps operational responsibility.
     const ownerCloser = await getCloserByUserId(preRow.ownerUserId);

@@ -13,6 +13,7 @@ import { getPool, isDbConfigured } from "@/lib/db";
 import { env, isProd } from "./env";
 import { describeEmailProvider } from "./email/provider";
 import { describeDocumentStorage } from "./hr/salary-slip-storage";
+import { missingProductionConfig, productionConfigAdvisories } from "./config/production-guard";
 import journal from "../../drizzle/meta/_journal.json";
 
 /** number of migrations bundled with this build (the canonical schema history). */
@@ -51,6 +52,8 @@ export interface HealthReport {
   email: { configured: boolean; provider: string | null; reason: string | null };
   storage: { provider: string; rootConfigured: boolean; durable: boolean };
   automation: { cronSecretConfigured: boolean };
+  /** production config guard — NAMES of missing vars only, never values */
+  config: { ok: boolean; missing: string[]; advisories: string[] };
 }
 
 export interface HealthOptions {
@@ -89,6 +92,10 @@ export async function collectHealth(opts: HealthOptions = {}): Promise<HealthRep
     automation: {
       cronSecretConfigured: Boolean(env("OFFICEVERSE_CRON_SECRET") || env("CRON_SECRET")),
     },
+    config: (() => {
+      const missing = missingProductionConfig();
+      return { ok: missing.length === 0, missing, advisories: productionConfigAdvisories() };
+    })(),
   };
 
   if (opts.deep && dbConfigured) {
@@ -129,5 +136,6 @@ export function publicLiveness(report: HealthReport) {
     email_provider: report.email.configured ? "configured" : "not-configured",
     storage: report.storage.durable ? "configured" : "not-configured",
     automation: report.automation.cronSecretConfigured ? "configured" : "not-configured",
+    config: report.config.ok ? "ok" : "incomplete",
   };
 }

@@ -6,7 +6,21 @@
  * / convert inside a single MySQL transaction. `*ForUpdate` reads take a row
  * lock (SELECT … FOR UPDATE) to serialise concurrent transitions.
  */
-import { and, asc, desc, eq, gte, isNull, like, lt, lte, or, sql, type SQL } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNull,
+  like,
+  lt,
+  lte,
+  or,
+  sql,
+  type SQL,
+} from "drizzle-orm";
 import { getDb, type DBX } from "@/lib/db";
 import {
   followUpAttempts,
@@ -69,6 +83,9 @@ export async function nextFollowUpCode(ex: DBX = getDb()): Promise<string> {
 
 export interface ListFollowUpsQuery {
   ownerUserId?: number | undefined;
+  /** Admin UAT §3/§4 — restrict to a role and/or a set of owner user ids */
+  ownerRole?: "agent" | "closer" | undefined;
+  ownerUserIdIn?: number[] | undefined;
   status?: FollowUp["status"] | undefined;
   /** derived bucket filter — mutually exclusive with a plain `status` */
   bucket?: "today" | "upcoming" | "overdue" | "completed" | undefined;
@@ -90,6 +107,12 @@ export async function listFollowUps(
 ): Promise<{ rows: FollowUp[]; total: number }> {
   const conds: SQL[] = [];
   if (query.ownerUserId != null) conds.push(eq(followUps.ownerUserId, query.ownerUserId));
+  if (query.ownerRole) conds.push(eq(followUps.ownerRole, query.ownerRole));
+  if (query.ownerUserIdIn) {
+    conds.push(
+      query.ownerUserIdIn.length ? inArray(followUps.ownerUserId, query.ownerUserIdIn) : sql`1 = 0`,
+    );
+  }
 
   if (query.bucket === "today") {
     conds.push(eq(followUps.status, "SCHEDULED"));

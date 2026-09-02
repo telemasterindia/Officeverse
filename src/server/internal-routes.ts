@@ -22,7 +22,9 @@ import { nowIST } from "./time";
 import { collectHealth, publicLiveness } from "./health";
 import { processMonthlySalarySlips } from "./hr/salary-slip-batch";
 import { previousPayrollMonthIST } from "./hr/salary-slip-cron";
+import { runDailyTick } from "./notifications/daily-jobs";
 import { tvState, tvAssetBytes } from "./live/tv-service";
+import { getCompanyLogo } from "./branding/service";
 import { HttpError } from "./http-error";
 import { isDbConfigured } from "@/lib/db";
 
@@ -109,6 +111,27 @@ export async function handleInternal(request: Request): Promise<Response | null>
     }
   }
 
+  // Admin UAT §7 — the ONE official company logo, referenced by salary slips,
+  // branded emails and printable HR/payroll documents. Public GET (a logo is
+  // not sensitive); returns 404 until an Admin uploads one.
+  if (path === "/api/branding/logo") {
+    if (request.method !== "GET") return json({ error: "method_not_allowed" }, 405);
+    try {
+      const logo = await getCompanyLogo();
+      if (!logo) return json({ error: "not_found" }, 404);
+      return new Response(new Uint8Array(logo.bytes), {
+        status: 200,
+        headers: {
+          "content-type": logo.mime,
+          "cache-control": "public, max-age=300",
+          "content-length": String(logo.bytes.byteLength),
+        },
+      });
+    } catch {
+      return json({ error: "logo_failed" }, 500);
+    }
+  }
+
   if (path === "/internal/monthly-salary-slips") {
     if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
     if (!cronAuthorized(request)) return json({ error: "unauthorized" }, 401);
@@ -139,16 +162,37 @@ export async function handleInternal(request: Request): Promise<Response | null>
     }
   }
 
-  if (path === "/internal/tick" || path === "/internal/drain-email") {
+  if (path === "/internal/tick") {
     if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
     if (!cronAuthorized(request)) return json({ error: "unauthorized" }, 401);
-    // The reminder scheduler + email-job outbox drain are not implemented yet.
+    if (!isDbConfigured()) return json({ error: "db_unavailable" }, 503);
+    // SAFE BY DEFAULT: a dry-run count unless the caller opts in with run=1.
+    const dryRun = url.searchParams.get("run") !== "1";
+    try {
+      const result = await runDailyTick({ dryRun });
+      return json(result);
+    } catch (err) {
+      return json(
+        {
+          ok: false,
+          error: "tick_failed",
+          message: err instanceof Error ? err.message.slice(0, 200) : "unknown",
+        },
+        502,
+      );
+    }
+  }
+
+  if (path === "/internal/drain-email") {
+    if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+    if (!cronAuthorized(request)) return json({ error: "unauthorized" }, 401);
+    // The email-job outbox drain worker is a future phase (no provider wired).
     return json(
       {
         ok: false,
         endpoint: path,
         status: "not_implemented",
-        note: "Only /internal/monthly-salary-slips is wired. Reminder scheduler + email-job drain are future phases.",
+        note: "Email jobs are enqueued (see /internal/tick). The delivery worker + provider are a future phase.",
       },
       501,
     );

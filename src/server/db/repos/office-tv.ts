@@ -147,8 +147,10 @@ export async function insertAnnouncement(
   v: NewOfficeTvAnnouncement,
   ex: DBX = getDb(),
 ): Promise<{ id: number }> {
-  const res = await ex.insert(officeTvAnnouncements).values(v);
-  return { id: Number((res as unknown as { insertId?: number }).insertId ?? 0) };
+  // `$returningId()` is the reliable MySQL id path (matches repos/scoring.ts);
+  // the previous top-level `.insertId` read returned 0 on this drizzle build.
+  const rows = await ex.insert(officeTvAnnouncements).values(v).$returningId();
+  return { id: Number(rows[0]?.id ?? 0) };
 }
 
 export async function listAnnouncements(

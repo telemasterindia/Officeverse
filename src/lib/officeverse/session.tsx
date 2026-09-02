@@ -6,9 +6,8 @@
  * browser cannot set the user id, role, or validity: there is no writable
  * localStorage identity any more.
  *
- * localStorage is still used for genuine UI PREFERENCES ONLY — theme, the
- * illustrated avatar, and the "quote seen today" flag. None of these affect
- * authentication or authorization.
+ * localStorage is still used for genuine UI PREFERENCES ONLY — theme and the
+ * "quote seen today" flag. Neither affects authentication or authorization.
  */
 import {
   createContext,
@@ -22,17 +21,19 @@ import {
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { loginFn, logoutFn, meFn } from "./auth-fns";
-import { avatarFromSeed, normalizeAvatar } from "./avatar";
 import { toSessionUser } from "./session-user";
-import type { AvatarConfig, ProcessCode, SessionUser } from "./types";
+import type { ProcessCode, SessionUser } from "./types";
 
 const QUOTE_KEY = "officeverse.quoteShown";
 const THEME_KEY = "officeverse.theme";
-const AVATAR_KEY = "officeverse.avatar";
 const AUTH_TICK_KEY = "officeverse.auth_tick"; // cross-tab change signal (no identity)
 
 const AUTH_QUERY_KEY = ["auth", "me"] as const;
-const PUBLIC_PATHS = ["/", "/login"];
+// "/office-tv" is a standalone kiosk route authenticated by the Office TV
+// display token (ovtv_… / tv_read), NOT by a CRM user session — so it must be
+// exempt from the "no CRM session → redirect to /" guard below. The display
+// token is still mandatory for /api/office-tv/state (verifyDisplayToken).
+const PUBLIC_PATHS = ["/", "/login", "/office-tv"];
 
 type Theme = "dark" | "light";
 
@@ -42,12 +43,10 @@ interface SessionState {
   devMode: boolean;
   theme: Theme;
   quoteSeen: boolean;
-  avatar: AvatarConfig | null;
   signIn: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
   /** client-only display override — the server always uses the DB user's process */
   setProcess: (p: ProcessCode) => void;
-  setAvatar: (config: AvatarConfig) => void;
   toggleTheme: () => void;
   markQuoteSeen: () => void;
 }
@@ -88,24 +87,16 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const devMode = meQuery.data?.devMode ?? false;
   const ready = !meQuery.isLoading;
 
-  const [theme, setTheme] = useState<Theme>("light");
+  const [theme, setTheme] = useState<Theme>("dark");
   const [quoteSeen, setQuoteSeen] = useState(true);
-  const [avatarMap, setAvatarMap] = useState<Record<string, AvatarConfig>>({});
   const [processOverride, setProcessOverride] = useState<ProcessCode | null>(null);
 
-  /* ---- preference bootstrap (theme / avatar / quote only) ---- */
+  /* ---- preference bootstrap (theme / quote only) ---- */
   useEffect(() => {
     try {
-      const t = (localStorage.getItem(THEME_KEY) as Theme | null) ?? "light";
+      const t = (localStorage.getItem(THEME_KEY) as Theme | null) ?? "dark";
       setTheme(t);
       setQuoteSeen(localStorage.getItem(QUOTE_KEY) === todayKey());
-      const am = localStorage.getItem(AVATAR_KEY);
-      if (am) {
-        const parsed = JSON.parse(am);
-        if (parsed && typeof parsed === "object") {
-          setAvatarMap(parsed as Record<string, AvatarConfig>);
-        }
-      }
     } catch {
       /* ignore */
     }
@@ -165,22 +156,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   const setProcess = useCallback((p: ProcessCode) => setProcessOverride(p), []);
 
-  const setAvatar = useCallback(
-    (config: AvatarConfig) => {
-      if (!user) return;
-      setAvatarMap((prev) => {
-        const next = { ...prev, [user.id]: normalizeAvatar(config) };
-        try {
-          localStorage.setItem(AVATAR_KEY, JSON.stringify(next));
-        } catch {
-          /* ignore */
-        }
-        return next;
-      });
-    },
-    [user],
-  );
-
   const toggleTheme = useCallback(() => {
     setTheme((prev) => {
       const next = prev === "dark" ? "light" : "dark";
@@ -202,12 +177,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const avatar = useMemo<AvatarConfig | null>(() => {
-    if (!user) return null;
-    const saved = avatarMap[user.id];
-    return saved ? normalizeAvatar(saved) : avatarFromSeed(`${user.id}|${user.name}`);
-  }, [user, avatarMap]);
-
   const value = useMemo<SessionState>(
     () => ({
       user,
@@ -215,11 +184,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       devMode,
       theme,
       quoteSeen,
-      avatar,
       signIn,
       signOut,
       setProcess,
-      setAvatar,
       toggleTheme,
       markQuoteSeen,
     }),
@@ -229,11 +196,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       devMode,
       theme,
       quoteSeen,
-      avatar,
       signIn,
       signOut,
       setProcess,
-      setAvatar,
       toggleTheme,
       markQuoteSeen,
     ],

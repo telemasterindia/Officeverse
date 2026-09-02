@@ -13,6 +13,7 @@ import { recordAudit } from "../audit";
 import { HttpError } from "../http-error";
 import { nowIST, istWallClockToEpochMs } from "../time";
 import { assertCanManageOfficeTv, assertValidAnnouncement } from "../authz/office-tv";
+import { assertCanRunOperations } from "../authz/operations";
 import * as repo from "../db/repos/office-tv";
 import { DEFAULT_CELEBRATION_ASSETS, isCelebrationCategory } from "./assets";
 import { DEFAULT_TV_CONFIG, resolveTvConfig, type TvConfig } from "./config";
@@ -20,6 +21,11 @@ import { generateDisplayToken } from "./tokens";
 import { celebrationAssetKey, getAssetStore, __resetAssetStore } from "./asset-storage";
 import { validateCelebrationUpload, MAX_CELEBRATION_BYTES } from "./asset-validate";
 import { pickActiveAnnouncement, expiredAnnouncementIds } from "./announcement-select";
+import {
+  normalizeAnnouncementAudio,
+  sanitizeAnnouncementText,
+  type AnnouncementAudioConfig,
+} from "./announcement-audio";
 
 export { __resetAssetStore };
 
@@ -458,6 +464,12 @@ export interface AnnouncementInput {
   publishAt?: string | null;
   expiresAt?: string | null;
   publishNow?: boolean;
+  /* -- Phase 10 Stage 2 — per-announcement audio / TTS / celebration -- */
+  ttsEnabled?: boolean;
+  ttsConfig?: Record<string, unknown> | null;
+  openingSound?: string | null;
+  closingSound?: string | null;
+  celebrationProfileId?: number | null;
 }
 
 export interface AnnouncementDTO {
@@ -470,16 +482,27 @@ export interface AnnouncementDTO {
   effect: string | null;
   priority: string;
   status: string;
+  enabled: boolean;
   durationMs: number;
   publishAt: string | null;
   expiresAt: string | null;
   publishedAt: string | null;
   createdAt: string;
+  /* Phase 10 Stage 2 */
+  ttsEnabled: boolean;
+  audio: AnnouncementAudioConfig;
+  celebrationProfileId: number | null;
 }
 
 function toAnnouncementDTO(
   r: Awaited<ReturnType<typeof repo.listAnnouncements>>[number],
 ): AnnouncementDTO {
+  const audio = normalizeAnnouncementAudio({
+    ttsEnabled: r.ttsEnabled,
+    ttsConfig: r.ttsConfig,
+    openingSound: r.openingSound,
+    closingSound: r.closingSound,
+  });
   return {
     id: r.id,
     title: r.title,
@@ -490,18 +513,24 @@ function toAnnouncementDTO(
     effect: r.effect ?? null,
     priority: r.priority,
     status: r.status,
+    enabled: r.enabled,
     durationMs: r.durationMs,
     publishAt: r.publishAt ?? null,
     expiresAt: r.expiresAt ?? null,
     publishedAt: r.publishedAt ?? null,
     createdAt: r.createdAt,
+    ttsEnabled: audio.ttsEnabled,
+    audio,
+    celebrationProfileId: r.celebrationProfileId ?? null,
   };
 }
 
 export async function listAnnouncements(
   actor: Pick<User, "role">,
 ): Promise<{ dbUnavailable?: boolean; rows: AnnouncementDTO[] }> {
-  assertCanManageOfficeTv(actor.role);
+  // Phase 6.5 — team announcements are an Operations Control surface: Admin +
+  // Closer (Operations Manager). Displays / TV settings / assets stay Admin-only.
+  assertCanRunOperations(actor.role);
   if (!isDbConfigured()) return { dbUnavailable: true, rows: [] };
   const rows = await repo.listAnnouncements(60);
   return { rows: rows.map(toAnnouncementDTO) };
@@ -512,7 +541,7 @@ export async function createAnnouncement(
   input: AnnouncementInput,
   meta: Meta = {},
 ): Promise<{ ok: true; id: number; status: string }> {
-  assertCanManageOfficeTv(actor.role);
+  assertCanRunOperations(actor.role);
   const durationMs = input.durationMs ?? 12_000;
   const priority = input.priority ?? "NORMAL";
   assertValidAnnouncement({ title: input.title, message: input.message, durationMs, priority });
@@ -521,12 +550,18 @@ export async function createAnnouncement(
   const now = nowIST();
   const publishNow = input.publishNow === true || (!input.publishAt && input.publishNow !== false);
   const status = publishNow ? "published" : "scheduled";
+  const audio = normalizeAnnouncementAudio({
+    ttsEnabled: input.ttsEnabled,
+    ttsConfig: input.ttsConfig,
+    openingSound: input.openingSound,
+    closingSound: input.closingSound,
+  });
 
   const { id } = await repo.insertAnnouncement(
     {
-      title: input.title.trim().slice(0, 120),
-      subtitle: input.subtitle?.trim().slice(0, 160) || null,
-      message: input.message.trim().slice(0, 600),
+      title: sanitizeAnnouncementText(input.title, 120),
+      subtitle: input.subtitle ? sanitizeAnnouncementText(input.subtitle, 160) : null,
+      message: sanitizeAnnouncementText(input.message, 600),
       audience: input.audience ?? "all",
       process: input.process ?? null,
       effect: input.effect?.trim().slice(0, 24) || null,
@@ -534,9 +569,17 @@ export async function createAnnouncement(
       durationMs,
       priority,
       status,
+      ttsEnabled: audio.ttsEnabled,
+      ttsConfig: audio.tts as never,
+      openingSound: audio.openingSound,
+      closingSound: audio.closingSound,
+      celebrationProfileId: input.celebrationProfileId ?? null,
       publishAt: input.publishAt ?? null,
       expiresAt: input.expiresAt ?? null,
-      enabled: true,
+      // Phase 10 Stage 2 — a Command Center draft (publishNow:false) starts
+      // DISABLED: preview it, then explicitly enable / play. The legacy
+      // publish-now flow (/live) keeps enabling immediately.
+      enabled: publishNow,
       createdByUserId: actor.id,
       createdAt: now,
       updatedAt: now,
@@ -545,6 +588,7 @@ export async function createAnnouncement(
     db,
   );
 
+  // legacy publish/schedule audit (retained for the pre-6.5 flow) …
   await recordAudit({
     actorUserId: actor.id,
     actorRole: actor.role,
@@ -552,7 +596,7 @@ export async function createAnnouncement(
     entityType: "office_tv_announcement",
     entityId: id,
     metadata: {
-      title: input.title.trim().slice(0, 120),
+      title: sanitizeAnnouncementText(input.title, 120),
       priority,
       audience: input.audience ?? "all",
       publishAt: input.publishAt ?? null,
@@ -562,7 +606,129 @@ export async function createAnnouncement(
     ip: meta.ip ?? null,
     userAgent: meta.userAgent ?? null,
   });
+  // … plus the Phase-10 Command Center action.
+  await recordAudit({
+    actorUserId: actor.id,
+    actorRole: actor.role,
+    action: "ANNOUNCEMENT_CREATED",
+    entityType: "office_tv_announcement",
+    entityId: id,
+    metadata: {
+      before: null,
+      after: {
+        title: sanitizeAnnouncementText(input.title, 120),
+        priority,
+        audience: input.audience ?? "all",
+        ttsEnabled: audio.ttsEnabled,
+        openingSound: audio.openingSound,
+        closingSound: audio.closingSound,
+        celebrationProfileId: input.celebrationProfileId ?? null,
+        status,
+      },
+      success: true,
+    },
+    ip: meta.ip ?? null,
+    userAgent: meta.userAgent ?? null,
+  });
   return { ok: true, id, status };
+}
+
+export async function updateAnnouncementFields(
+  actor: Pick<User, "id" | "role">,
+  id: number,
+  input: AnnouncementInput,
+  meta: Meta = {},
+): Promise<{ ok: true; id: number }> {
+  assertCanRunOperations(actor.role);
+  const durationMs = input.durationMs ?? 12_000;
+  const priority = input.priority ?? "NORMAL";
+  assertValidAnnouncement({ title: input.title, message: input.message, durationMs, priority });
+  if (!isDbConfigured()) throw new HttpError(503, "Database not configured", "db_unavailable");
+  const db = getDb();
+  const row = await repo.getAnnouncement(id, db);
+  if (!row) throw new HttpError(404, "Announcement not found", "not_found");
+  const audio = normalizeAnnouncementAudio({
+    ttsEnabled: input.ttsEnabled,
+    ttsConfig: input.ttsConfig,
+    openingSound: input.openingSound,
+    closingSound: input.closingSound,
+  });
+  const now = nowIST();
+  await repo.updateAnnouncement(
+    id,
+    {
+      title: sanitizeAnnouncementText(input.title, 120),
+      subtitle: input.subtitle ? sanitizeAnnouncementText(input.subtitle, 160) : null,
+      message: sanitizeAnnouncementText(input.message, 600),
+      audience: input.audience ?? row.audience,
+      process: input.process ?? null,
+      effect: input.effect?.trim().slice(0, 24) || null,
+      durationMs,
+      priority,
+      ttsEnabled: audio.ttsEnabled,
+      ttsConfig: audio.tts as never,
+      openingSound: audio.openingSound,
+      closingSound: audio.closingSound,
+      celebrationProfileId: input.celebrationProfileId ?? null,
+      expiresAt: input.expiresAt ?? null,
+      updatedAt: now,
+    },
+    db,
+  );
+  await recordAudit({
+    actorUserId: actor.id,
+    actorRole: actor.role,
+    action: "ANNOUNCEMENT_UPDATED",
+    entityType: "office_tv_announcement",
+    entityId: id,
+    metadata: {
+      before: {
+        title: row.title,
+        priority: row.priority,
+        ttsEnabled: row.ttsEnabled,
+        openingSound: row.openingSound ?? null,
+        closingSound: row.closingSound ?? null,
+        celebrationProfileId: row.celebrationProfileId ?? null,
+      },
+      after: {
+        title: sanitizeAnnouncementText(input.title, 120),
+        priority,
+        ttsEnabled: audio.ttsEnabled,
+        openingSound: audio.openingSound,
+        closingSound: audio.closingSound,
+        celebrationProfileId: input.celebrationProfileId ?? null,
+      },
+      success: true,
+    },
+    ip: meta.ip ?? null,
+    userAgent: meta.userAgent ?? null,
+  });
+  return { ok: true, id };
+}
+
+export async function setAnnouncementEnabled(
+  actor: Pick<User, "id" | "role">,
+  id: number,
+  enabled: boolean,
+  meta: Meta = {},
+): Promise<{ ok: true }> {
+  assertCanRunOperations(actor.role);
+  if (!isDbConfigured()) throw new HttpError(503, "Database not configured", "db_unavailable");
+  const db = getDb();
+  const row = await repo.getAnnouncement(id, db);
+  if (!row) throw new HttpError(404, "Announcement not found", "not_found");
+  await repo.updateAnnouncement(id, { enabled, updatedAt: nowIST() }, db);
+  await recordAudit({
+    actorUserId: actor.id,
+    actorRole: actor.role,
+    action: enabled ? "ANNOUNCEMENT_ENABLED" : "ANNOUNCEMENT_DISABLED",
+    entityType: "office_tv_announcement",
+    entityId: id,
+    metadata: { before: { enabled: row.enabled }, after: { enabled }, success: true },
+    ip: meta.ip ?? null,
+    userAgent: meta.userAgent ?? null,
+  });
+  return { ok: true };
 }
 
 export async function publishAnnouncementNow(
@@ -570,7 +736,7 @@ export async function publishAnnouncementNow(
   id: number,
   meta: Meta = {},
 ): Promise<{ ok: true }> {
-  assertCanManageOfficeTv(actor.role);
+  assertCanRunOperations(actor.role);
   if (!isDbConfigured()) throw new HttpError(503, "Database not configured", "db_unavailable");
   const db = getDb();
   const row = await repo.getAnnouncement(id, db);
@@ -602,7 +768,7 @@ export async function stopAnnouncement(
   id: number,
   meta: Meta = {},
 ): Promise<{ ok: true }> {
-  assertCanManageOfficeTv(actor.role);
+  assertCanRunOperations(actor.role);
   if (!isDbConfigured()) throw new HttpError(503, "Database not configured", "db_unavailable");
   const db = getDb();
   const row = await repo.getAnnouncement(id, db);
@@ -636,6 +802,10 @@ export async function currentAnnouncementForTv(nowMs: number): Promise<{
   durationMs: number;
   audience: string;
   process: string | null;
+  /* Phase 10 Stage 2 — audio config travels with the persistent banner too */
+  ttsEnabled: boolean;
+  audio: AnnouncementAudioConfig;
+  celebrationProfileId: number | null;
 } | null> {
   if (!isDbConfigured()) return null;
   const db = getDb();
@@ -671,5 +841,13 @@ export async function currentAnnouncementForTv(nowMs: number): Promise<{
     durationMs: r.durationMs,
     audience: r.audience,
     process: r.process ?? null,
+    ttsEnabled: !!r.ttsEnabled,
+    audio: normalizeAnnouncementAudio({
+      ttsEnabled: r.ttsEnabled,
+      ttsConfig: r.ttsConfig,
+      openingSound: r.openingSound,
+      closingSound: r.closingSound,
+    }),
+    celebrationProfileId: r.celebrationProfileId ?? null,
   };
 }

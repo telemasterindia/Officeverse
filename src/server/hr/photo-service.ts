@@ -9,7 +9,7 @@
  *
  * No payroll / HR / points impact whatsoever.
  */
-import { eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { getDb, isDbConfigured } from "@/lib/db";
 import { staffPhotos, users } from "@/lib/db/schema";
 import { recordAudit } from "../audit";
@@ -63,9 +63,19 @@ async function currentPhotoRow(userId: number) {
     .where(eq(users.id, userId))
     .limit(1);
   const assetId = u[0]?.photoAssetId ?? null;
-  if (!assetId) return null;
-  const rows = await db.select().from(staffPhotos).where(eq(staffPhotos.id, assetId)).limit(1);
-  return rows[0] ?? null;
+  if (assetId) {
+    const rows = await db.select().from(staffPhotos).where(eq(staffPhotos.id, assetId)).limit(1);
+    if (rows[0]) return rows[0];
+  }
+  // Self-heal: the pointer is missing / stale (e.g. a 0 written by an older
+  // build) but a real upload exists — fall back to this user's latest photo row.
+  const latest = await db
+    .select()
+    .from(staffPhotos)
+    .where(eq(staffPhotos.userId, userId))
+    .orderBy(desc(staffPhotos.id))
+    .limit(1);
+  return latest[0] ?? null;
 }
 
 /* ------------------------------ set ------------------------------ */
@@ -83,6 +93,15 @@ export async function setProfilePhoto(
   meta: Meta = {},
 ): Promise<{ ok: true; photo: PhotoMetaDTO }> {
   if (!isDbConfigured()) throw new HttpError(503, "Database not configured", "db_unavailable");
+  // UAT #1: the official employee photo is an HR record — only Admin / HR may
+  // set or replace it. Agents / Closers can VIEW their photo but not change it.
+  if (!isPhotoManager(actor.role)) {
+    throw new HttpError(
+      403,
+      "Your profile photo is managed by HR / Admin — please contact them to update it.",
+      "forbidden",
+    );
+  }
   const targetUserId = resolvePhotoTarget(actor.role, actor.id, input.targetUserId ?? null);
   assertCanManagePhotoFor(actor.role, actor.id, targetUserId);
 
@@ -101,28 +120,43 @@ export async function setProfilePhoto(
   await store.put(key, input.bytes);
 
   const now = nowIST();
-  const res = await db.insert(staffPhotos).values({
-    userId: targetUserId,
-    storage: "local",
-    path: key,
-    url: null,
-    mime: v.mime,
-    bytes: v.bytes,
-    width: v.width,
-    height: v.height,
-    uploadedByUserId: actor.id,
-    createdAt: now,
-  });
-  const newId = Number((res as unknown as { insertId?: number | string }).insertId ?? 0);
+  // Drizzle mysql2 returns [ResultSetHeader, …] from .values() — reading
+  // `.insertId` off that array yields undefined (→ 0). `.$returningId()` gives
+  // the real new PK: [{ id: N }].
+  const inserted = await db
+    .insert(staffPhotos)
+    .values({
+      userId: targetUserId,
+      storage: "local",
+      path: key,
+      url: null,
+      mime: v.mime,
+      bytes: v.bytes,
+      width: v.width,
+      height: v.height,
+      uploadedByUserId: actor.id,
+      createdAt: now,
+    })
+    .$returningId();
+  const newId = Number(inserted[0]?.id ?? 0);
+  if (!newId)
+    throw new HttpError(500, "Could not persist the photo record", "photo_persist_failed");
+
   await db
     .update(users)
     .set({ photoAssetId: newId, updatedAt: now })
     .where(eq(users.id, targetUserId));
 
-  // drop the previous blob + row (the effects layer never depends on it)
-  if (prev) {
-    await store.deleteKey(prev.path).catch(() => undefined);
-    await db.delete(staffPhotos).where(eq(staffPhotos.id, prev.id));
+  // "one real photo per user" — drop every OTHER row (+ its blob) for this
+  // user, self-correcting any orphans left by an older build.
+  const stale = await db
+    .select({ id: staffPhotos.id, path: staffPhotos.path })
+    .from(staffPhotos)
+    .where(eq(staffPhotos.userId, targetUserId));
+  for (const s of stale) {
+    if (s.id === newId) continue;
+    if (s.path !== key) await store.deleteKey(s.path).catch(() => undefined);
+    await db.delete(staffPhotos).where(eq(staffPhotos.id, s.id));
   }
 
   await recordAudit({
@@ -162,22 +196,34 @@ export async function removeProfilePhoto(
   meta: Meta = {},
 ): Promise<{ ok: true; photo: PhotoMetaDTO }> {
   if (!isDbConfigured()) throw new HttpError(503, "Database not configured", "db_unavailable");
+  // UAT #1: only Admin / HR may remove the official employee photo.
+  if (!isPhotoManager(actor.role)) {
+    throw new HttpError(
+      403,
+      "Your profile photo is managed by HR / Admin — please contact them to update it.",
+      "forbidden",
+    );
+  }
   const targetUserId = resolvePhotoTarget(actor.role, actor.id, requestedUserId ?? null);
   assertCanManagePhotoFor(actor.role, actor.id, targetUserId);
 
   const db = getDb();
-  const prev = await currentPhotoRow(targetUserId);
   const now = nowIST();
   await db
     .update(users)
     .set({ photoAssetId: null, updatedAt: now })
     .where(eq(users.id, targetUserId));
-  if (prev) {
-    await getPhotoStore()
-      .deleteKey(prev.path)
-      .catch(() => undefined);
-    await db.delete(staffPhotos).where(eq(staffPhotos.id, prev.id));
+  // remove EVERY photo row + blob for this user (there should only be one)
+  const rows = await db
+    .select({ id: staffPhotos.id, path: staffPhotos.path })
+    .from(staffPhotos)
+    .where(eq(staffPhotos.userId, targetUserId));
+  const store = getPhotoStore();
+  for (const r of rows) {
+    await store.deleteKey(r.path).catch(() => undefined);
+    await db.delete(staffPhotos).where(eq(staffPhotos.id, r.id));
   }
+  const prev = rows[0] ?? null;
 
   await recordAudit({
     actorUserId: actor.id,

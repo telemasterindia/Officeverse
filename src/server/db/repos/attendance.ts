@@ -5,9 +5,16 @@
  * get-then-write upsert keeps multiple sessions from creating duplicate days.
  * A row whose `source = "corrected"` is never overwritten by the derived path.
  */
-import { and, asc, desc, eq, gte, inArray, lte, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lte, sql, type SQL } from "drizzle-orm";
 import { getDb, type DBX } from "@/lib/db";
-import { attendance, users, type Attendance, type NewAttendance } from "@/lib/db/schema";
+import {
+  agents,
+  attendance,
+  closers,
+  users,
+  type Attendance,
+  type NewAttendance,
+} from "@/lib/db/schema";
 
 export async function getByUserAndDate(
   userId: number,
@@ -47,6 +54,11 @@ export interface AttendanceListFilters {
 export interface AttendanceListRow extends Attendance {
   employeeName: string;
   employeeEmail: string;
+  /** the employee's CURRENT authoritative process (users.process) */
+  employeeProcess: string;
+  /** current canonical Employee ID (agents.agent_code / closers.closer_code) */
+  employeeCode: string | null;
+  photoAvailable: boolean;
 }
 
 export async function listByFilters(
@@ -58,7 +70,9 @@ export async function listByFilters(
   if (f.from) conds.push(gte(attendance.operationalDate, f.from));
   if (f.to) conds.push(lte(attendance.operationalDate, f.to));
   if (f.userIds && f.userIds.length) conds.push(inArray(attendance.userId, f.userIds));
-  if (f.process) conds.push(eq(attendance.process, f.process as never));
+  // Authoritative process filter — the employee's CURRENT `users.process`, not
+  // the per-attendance-row snapshot column.
+  if (f.process) conds.push(eq(users.process, f.process as never));
   if (f.shiftName) conds.push(eq(attendance.shiftName, f.shiftName));
   if (f.status) conds.push(eq(attendance.status, f.status as never));
 
@@ -67,9 +81,14 @@ export async function listByFilters(
       row: attendance,
       employeeName: users.fullName,
       employeeEmail: users.email,
+      employeeProcess: users.process,
+      photoAssetId: users.photoAssetId,
+      employeeCode: sql<string | null>`coalesce(${agents.agentCode}, ${closers.closerCode})`,
     })
     .from(attendance)
     .innerJoin(users, eq(users.id, attendance.userId))
+    .leftJoin(agents, eq(agents.userId, users.id))
+    .leftJoin(closers, eq(closers.userId, users.id))
     .where(conds.length ? and(...conds) : undefined)
     .orderBy(desc(attendance.operationalDate), asc(users.fullName))
     .limit(limit);
@@ -78,6 +97,9 @@ export async function listByFilters(
     ...r.row,
     employeeName: r.employeeName,
     employeeEmail: r.employeeEmail,
+    employeeProcess: r.employeeProcess,
+    employeeCode: r.employeeCode ?? null,
+    photoAvailable: r.photoAssetId != null,
   }));
 }
 

@@ -31,8 +31,8 @@ const TEXT_FILTERS: Partial<Record<FilterKey, { label: string; placeholder: stri
   action: { label: "Action", placeholder: "assign / reassign / unassign" },
   type: { label: "Import type", placeholder: "leads / follow_ups / workbook" },
   ownerRole: { label: "Owner role", placeholder: "agent / closer" },
-  agentCode: { label: "Agent ID", placeholder: "AG-00001" },
-  closerCode: { label: "Closer ID", placeholder: "CL-00001" },
+  agentCode: { label: "Agent ID", placeholder: "TMI_CC_001" },
+  closerCode: { label: "Closer ID", placeholder: "TMI_CL_001" },
   state: { label: "State", placeholder: "TX" },
   zip: { label: "ZIP", placeholder: "78701" },
   source: { label: "Source", placeholder: "app / import / conversion" },
@@ -79,7 +79,7 @@ function ExportsPage() {
         <EmptyState
           emoji="🔒"
           title="Admins only"
-          message="Data export is restricted to Admin accounts."
+          message="The Data Export centre is restricted to Admin accounts. The server also rejects any other role."
         />
       </div>
     );

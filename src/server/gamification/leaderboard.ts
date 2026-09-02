@@ -48,6 +48,21 @@ export interface WindowBounds {
   to: string | null;
 }
 
+const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Phase 8 — an explicit inclusive operational-date range for a Custom period.
+ * Both bounds are required "YYYY-MM-DD" server operational dates; `from <= to`.
+ * Never a browser-local timestamp. Total — throws on malformed input.
+ */
+export function customWindow(from: string, to: string): WindowBounds {
+  if (!YMD_RE.test(from) || !YMD_RE.test(to)) {
+    throw new Error("custom range bounds must be YYYY-MM-DD operational dates");
+  }
+  if (from > to) throw new Error("custom range 'from' must be <= 'to'");
+  return { from, to };
+}
+
 /**
  * The operational-date window for a leaderboard kind, anchored on
  * `operationalDate` (server-derived "YYYY-MM-DD").
@@ -88,6 +103,12 @@ export interface LeaderboardInputRow {
   bestStreak?: number;
   topBadge?: string | null;
   photoAvailable?: boolean;
+  /** Phase 8 — ledger-derived supporting counts for the selected period.
+   *  Carried through for display only; ranking is ALWAYS points then userId. */
+  leadsSubmitted?: number;
+  leadsAccepted?: number;
+  followUps?: number;
+  scoredLeads?: number;
 }
 
 export interface LeaderboardRow extends LeaderboardInputRow {

@@ -41,7 +41,9 @@ export const config = {
   photoStorage: () => (env("PHOTO_STORAGE") ?? "local") as "local" | "s3" | "r2" | "supabase",
   photoLocalDir: () => env("PHOTO_LOCAL_DIR") ?? "./storage/photos",
   photoPublicBase: () => env("PHOTO_PUBLIC_BASE") ?? "/media/photos",
-  photoMaxBytes: () => envInt("PHOTO_MAX_BYTES", 2 * 1024 * 1024),
+  // Admin UAT Batch-2 §2 — official employee photos: allow a normal
+  // high-quality phone photo (the browser still crops/compresses first).
+  photoMaxBytes: () => envInt("PHOTO_MAX_BYTES", 5 * 1024 * 1024),
   importUploadDir: () => env("IMPORT_UPLOAD_DIR") ?? "./storage/imports",
   importMaxBytes: () => envInt("IMPORT_MAX_BYTES", 25 * 1024 * 1024),
 };

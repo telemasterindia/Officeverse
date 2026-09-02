@@ -10,6 +10,8 @@
  */
 import { z } from "zod";
 import { FOLLOW_UP_STATUSES } from "@/lib/db/schema";
+import { AGENT_CODE_RE, CLOSER_CODE_RE } from "@/lib/officeverse/staff-codes";
+import { usPhoneSchema } from "./phone";
 
 const FU_STATUS = z.enum(FOLLOW_UP_STATUSES as unknown as [string, ...string[]]);
 
@@ -20,7 +22,8 @@ export const followUpCodeSchema = z
 export const closerCodeSchema = z
   .string()
   .trim()
-  .regex(/^CL-\d{5}$/, "Invalid Closer ID (expected CL-#####)");
+  // Canonical Closer Employee ID "TMI_CL_###"; legacy "CL-#####" still accepted.
+  .regex(CLOSER_CODE_RE, "Invalid Closer ID (expected TMI_CL_###)");
 
 const ymd = z
   .string()
@@ -49,7 +52,7 @@ const currentLate = z.enum(["Current", "Late"]).optional();
 
 export const customerCreateSchema = z.object({
   full_name: z.string().trim().min(1).max(200),
-  phone: z.string().trim().min(3).max(40),
+  phone: usPhoneSchema,
   email: emailField,
   address: optStr(500),
   city: optStr(120),
@@ -64,7 +67,7 @@ export const customerCreateSchema = z.object({
 export const customerPatchSchema = z
   .object({
     full_name: z.string().trim().min(1).max(200).optional(),
-    phone: z.string().trim().min(3).max(40).optional(),
+    phone: usPhoneSchema.optional(),
     email: emailField,
     address: optStr(500),
     city: optStr(120),
@@ -135,5 +138,9 @@ export const listFollowUpsSchema = z.object({
   sort: z.enum(["soonest", "latest", "newest"]).default("soonest"),
   /** admin-only — filter to one owner by users.id; ignored for non-admin */
   ownerUserId: z.coerce.number().int().positive().optional(),
+  /** admin-only filters (Admin UAT §3/§4) — ignored for non-admin callers */
+  process: z.enum(["US", "UK", "IN", "AU"]).optional(),
+  agentCode: z.string().trim().regex(AGENT_CODE_RE).optional(),
+  closerCode: closerCodeSchema.optional(),
 });
 export type ListFollowUpsInput = z.infer<typeof listFollowUpsSchema>;

@@ -11,6 +11,8 @@
  */
 import { z } from "zod";
 import { LEAD_STATUSES } from "@/lib/db/schema";
+import { AGENT_CODE_RE, CLOSER_CODE_RE } from "@/lib/officeverse/staff-codes";
+import { usPhoneSchema } from "./phone";
 
 const LEAD_STATUS_ENUM = z.enum(LEAD_STATUSES as unknown as [string, ...string[]]);
 
@@ -21,11 +23,13 @@ export const leadCodeSchema = z
 export const closerCodeSchema = z
   .string()
   .trim()
-  .regex(/^CL-\d{5}$/, "Invalid Closer ID (expected CL-#####)");
+  // Canonical Closer Employee ID "TMI_CL_###"; legacy "CL-#####" still accepted.
+  .regex(CLOSER_CODE_RE, "Invalid Closer ID (expected TMI_CL_###)");
 export const agentCodeSchema = z
   .string()
   .trim()
-  .regex(/^AG-\d{5}$/, "Invalid Agent ID (expected AG-#####)");
+  // Canonical Agent Employee ID "TMI_CC_###"; legacy "TMI_CC###" / "AG-#####" still accepted.
+  .regex(AGENT_CODE_RE, "Invalid Agent ID (expected TMI_CC_###)");
 
 const ymd = z
   .string()
@@ -43,7 +47,7 @@ const currentLate = z.enum(["Current", "Late"]).optional();
 
 export const createLeadSchema = z.object({
   customer_name: z.string().trim().min(1).max(200),
-  phone: z.string().trim().min(3).max(40),
+  phone: usPhoneSchema,
   email: emailField,
   /** operational SHIFT DATE; default = server-computed current shift date */
   date: ymd.optional(),
@@ -66,7 +70,7 @@ export type CreateLeadInput = z.infer<typeof createLeadSchema>;
 export const updateLeadSchema = z
   .object({
     customer_name: z.string().trim().min(1).max(200).optional(),
-    phone: z.string().trim().min(3).max(40).optional(),
+    phone: usPhoneSchema.optional(),
     email: emailField,
     address: optStr(500),
     city: optStr(120),
@@ -105,7 +109,8 @@ export const listLeadsSchema = z.object({
   q: optStr(120),
   shiftDateFrom: ymd.optional(),
   shiftDateTo: ymd.optional(),
-  /** admin-only filters — silently ignored for non-admin callers */
+  /** admin-only filters — silently ignored for non-admin callers (Admin UAT §3/§4) */
+  process: z.enum(["US", "UK", "IN", "AU"]).optional(),
   closerCode: closerCodeSchema.optional(),
   agentCode: agentCodeSchema.optional(),
   sort: z.enum(["newest", "oldest"]).default("newest"),

@@ -38,6 +38,10 @@ describe("payroll endpoints — placement & trust boundary", () => {
         "recordOvertimeFn",
         "setEmploymentPeriodFn",
         "voidAdjustmentFn",
+        // Monthly Attendance Register + Consolidated Payroll (read-only, all employees)
+        "attendanceRegisterFn",
+        "consolidatedPayrollFn",
+        "calculateAllPayrollFn",
       ].sort(),
     );
     const handlers = payrollFns.split(/export const \w+Fn/).slice(1);
@@ -55,10 +59,12 @@ describe("payroll endpoints — placement & trust boundary", () => {
     for (const m of payrollFns.matchAll(/\bstatus:\s*z\.[^\n]*/g)) {
       expect(m[0]).toMatch(/\.optional\(\)/);
     }
-    // calculate / approve / lock inputs carry only a target user + month
+    // calculate / approve / lock inputs carry only a target-employee identifier
+    // + month. `calcInput` identifies the employee by the canonical Employee ID
+    // (TMI_CC_### / TMI_CL_###); approve/lock act on an existing run by userId.
     for (const name of ["calcInput", "approveInput", "lockInput"]) {
       const body = payrollFns.slice(payrollFns.indexOf(`${name} = z.object({`)).split("})")[0]!;
-      expect(body).toMatch(/userId/);
+      expect(body).toMatch(/userId|employee_id/);
       expect(body).toMatch(/month/);
       expect(body).not.toMatch(/salary|bonus|status|amount/i);
     }

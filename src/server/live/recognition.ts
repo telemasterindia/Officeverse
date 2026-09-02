@@ -64,6 +64,14 @@ interface EmitInput {
   referenceId: string | null;
   dedupeKey: string;
   operationalDate: string;
+  /** Phase 5 — the Recognition celebration DECISION (semantic level + profile),
+   *  and the abstract points the Scoring Engine awarded for this event. Passed
+   *  straight through to the in-memory bus so the future Office TV renderer can
+   *  read them. Optional — Recognition still functions without a scoring result. */
+  celebrationLevel?: string | null;
+  celebrationProfile?: Record<string, unknown> | null;
+  points?: number | null;
+  subheadline?: string | null;
 }
 
 /** Persist + broadcast one recognition moment (idempotent on dedupeKey). */
@@ -121,6 +129,11 @@ async function emit(input: EmitInput): Promise<void> {
     hasVideo: !!celebration.videoKey,
     durationMs: celebration.durationMs,
     headline: input.headline,
+    subheadline: input.subheadline ?? null,
+    // Phase 5 — celebration decision + abstract points for the future renderer
+    celebrationLevel: input.celebrationLevel ?? null,
+    celebrationProfile: input.celebrationProfile ?? null,
+    points: typeof input.points === "number" ? Math.trunc(input.points) : null,
     subject: input.subjectUserId
       ? {
           userId: input.subjectUserId,
@@ -140,31 +153,77 @@ export interface LeadRecoInput {
   atMs?: number;
 }
 
-export async function onLeadSubmitted(input: LeadRecoInput): Promise<void> {
+/**
+ * Phase 5 — the canonical recognition entry. The dispatcher's recognition
+ * bridge calls this for a confirmed `BusinessEvent` (+ the Scoring Engine's
+ * result, where available). It drives the RECOGNITION MOMENT ONLY — it never
+ * awards points (that is the Scoring Engine's job, or the dispatcher's
+ * legacy-points bridge when no rule exists).
+ *
+ * Idempotent on `<eventType>:<source.type>:<source.id>` via `office_tv_events`,
+ * so an event retry / re-dispatch / server restart produces no second
+ * celebration.
+ */
+export interface BusinessRecognitionInput {
+  /** BusinessEvent.type, e.g. "LEAD_SUBMITTED" */
+  eventType: string;
+  /** the approved recognition KIND to celebrate as */
+  kind: RecognitionKind;
+  /** the employee being recognised */
+  subjectUserId: number;
+  source: { type: string; id: string };
+  headline: string | null;
+  subheadline: string | null;
+  /** abstract points the Scoring Engine awarded for this event (null = none) */
+  points: number | null;
+  /** the celebration DECISION metadata (semantic level + profile) */
+  celebrationLevel: string | null;
+  celebrationProfile: Record<string, unknown> | null;
+  atMs?: number;
+}
+
+export async function recognizeFromBusinessEvent(input: BusinessRecognitionInput): Promise<void> {
   if (!isDbConfigured()) return;
-  const user = await getUserById(input.agentUserId);
+  const user = await getUserById(input.subjectUserId);
   if (!user || (user.role !== "agent" && user.role !== "closer")) return;
 
-  await awardEvent({
-    userId: user.id,
-    event: "LEAD_SUBMITTED",
-    referenceType: "lead",
-    referenceId: input.leadCode,
-    ...(input.atMs != null ? { atMs: input.atMs } : {}),
-  }).catch(() => undefined);
-
   await emit({
-    kind: "LEAD_SUBMITTED",
-    eventId: hash(input.leadCode),
+    kind: input.kind,
+    eventId: hash(input.source.id),
     subjectUserId: user.id,
     subjectName: user.fullName,
     subjectRole: user.role,
     subjectPhotoAvailable: user.photoAssetId != null,
-    headline: "LEAD SUBMITTED",
-    referenceType: "lead",
-    referenceId: input.leadCode,
-    dedupeKey: `LEAD_SUBMITTED:lead:${input.leadCode}`,
+    headline: input.headline,
+    subheadline: input.subheadline,
+    referenceType: input.source.type,
+    referenceId: input.source.id,
+    dedupeKey: `${input.eventType}:${input.source.type}:${input.source.id}`,
     operationalDate: currentShiftDate(user.process, input.atMs),
+    celebrationLevel: input.celebrationLevel,
+    celebrationProfile: input.celebrationProfile,
+    points: input.points,
+  });
+}
+
+/**
+ * Retained for compatibility. Phase 5 moved LEAD_SUBMITTED onto the canonical
+ * BusinessEvent path, so points now come from the Scoring Engine / the
+ * dispatcher legacy-points bridge — NOT from here. This helper now drives the
+ * recognition moment only.
+ */
+export async function onLeadSubmitted(input: LeadRecoInput): Promise<void> {
+  await recognizeFromBusinessEvent({
+    eventType: "LEAD_SUBMITTED",
+    kind: "LEAD_SUBMITTED",
+    subjectUserId: input.agentUserId,
+    source: { type: "lead", id: input.leadCode },
+    headline: "LEAD SUBMITTED",
+    subheadline: null,
+    points: null,
+    celebrationLevel: null,
+    celebrationProfile: null,
+    ...(input.atMs != null ? { atMs: input.atMs } : {}),
   });
 }
 
@@ -174,13 +233,14 @@ export async function onLeadAccepted(input: LeadRecoInput): Promise<void> {
   if (!user || (user.role !== "agent" && user.role !== "closer")) return;
   const operationalDate = currentShiftDate(user.process, input.atMs);
 
-  const award = await awardEvent({
-    userId: user.id,
-    event: "LEAD_ACCEPTED",
-    referenceType: "lead",
-    referenceId: input.leadCode,
-    ...(input.atMs != null ? { atMs: input.atMs } : {}),
-  }).catch(() => null);
+  // Phase 7 — the BASE `LEAD_ACCEPTED` celebration AND its points now flow
+  // through the canonical BusinessEvent path
+  // (`emitBusinessEvent(buildLeadAcceptedEvent(...))` in `leads/service.ts` →
+  // dispatcher → { Scoring Engine | gated legacy-points fallback } →
+  // recognition bridge → LEVEL_2 celebration). This helper therefore no longer
+  // awards points or emits the base celebration — it keeps ONLY the side
+  // effects the BusinessEvent path does not cover: the agent notification, the
+  // THIRD_ACCEPTED_LEAD escalation and the TEAM_MILESTONE.
 
   // A real-time notification to the agent — never blocks their workflow.
   await createNotification({
@@ -195,45 +255,27 @@ export async function onLeadAccepted(input: LeadRecoInput): Promise<void> {
 
   // Escalate the Nth acceptance of the operational day to a heavy celebration,
   // where N is the CONFIGURED threshold (default 3) — a CELEBRATION threshold
-  // only, never a salary / incentive rule.
+  // only, never a salary / incentive rule. LEVEL_3 is out of Phase-7 scope, so
+  // this stays on the direct recognition path (not the BusinessEvent layer).
   const { cfg } = await loadOrchestratorConfig();
   const acceptedToday =
     (await repo.countSubjectEventsForDate(user.id, ACCEPT_KINDS, operationalDate).catch(() => 0)) +
     1;
   const isThird = cfg.thirdAcceptedThreshold > 0 && acceptedToday === cfg.thirdAcceptedThreshold;
-  const kind: RecognitionKind = isThird ? "THIRD_ACCEPTED_LEAD" : "LEAD_ACCEPTED";
-
-  await emit({
-    kind,
-    eventId: hash(input.leadCode + ":acc"),
-    subjectUserId: user.id,
-    subjectName: user.fullName,
-    subjectRole: user.role,
-    subjectPhotoAvailable: user.photoAssetId != null,
-    headline: isThird ? `${cfg.thirdAcceptedThreshold} ACCEPTED LEADS` : "LEAD ACCEPTED!",
-    referenceType: "lead",
-    referenceId: input.leadCode,
-    dedupeKey: `${isThird ? "THIRD_ACCEPTED_LEAD" : "LEAD_ACCEPTED"}:lead:${input.leadCode}`,
-    operationalDate,
-  });
-
-  // Achievement recognition (Phase-20 awarded them; surface any new ones).
-  if (award?.newAchievements?.length) {
-    for (const code of award.newAchievements) {
-      await emit({
-        kind: "ACHIEVEMENT_UNLOCKED",
-        eventId: hash(`${input.leadCode}:${code}`),
-        subjectUserId: user.id,
-        subjectName: user.fullName,
-        subjectRole: user.role,
-        subjectPhotoAvailable: user.photoAssetId != null,
-        headline: `ACHIEVEMENT: ${code.replace(/_/g, " ")}`,
-        referenceType: "achievement",
-        referenceId: code,
-        dedupeKey: `ACHIEVEMENT_UNLOCKED:${user.id}:${code}`,
-        operationalDate,
-      });
-    }
+  if (isThird) {
+    await emit({
+      kind: "THIRD_ACCEPTED_LEAD",
+      eventId: hash(input.leadCode + ":acc3"),
+      subjectUserId: user.id,
+      subjectName: user.fullName,
+      subjectRole: user.role,
+      subjectPhotoAvailable: user.photoAssetId != null,
+      headline: `${cfg.thirdAcceptedThreshold} ACCEPTED LEADS`,
+      referenceType: "lead",
+      referenceId: input.leadCode,
+      dedupeKey: `THIRD_ACCEPTED_LEAD:lead:${input.leadCode}`,
+      operationalDate,
+    });
   }
 
   // Team milestone (data-driven; 0 = disabled).
@@ -278,6 +320,7 @@ export async function onSale(input: SaleRecoInput): Promise<void> {
     ...(input.atMs != null ? { atMs: input.atMs } : {}),
   }).catch(() => undefined);
 
+  const operationalDate = currentShiftDate(user.process, input.atMs);
   await emit({
     kind: "SALE",
     eventId: hash(input.leadCode + ":sale"),
@@ -289,8 +332,80 @@ export async function onSale(input: SaleRecoInput): Promise<void> {
     referenceType: "lead",
     referenceId: input.leadCode,
     dedupeKey: `SALE:lead:${input.leadCode}`,
-    operationalDate: currentShiftDate(user.process, input.atMs),
+    operationalDate,
   });
+
+  // Phase 10 Stage 4 — let the Milestone Engine react to this confirmed SALE
+  // ("First Sale", "10 Sales", team sale targets …). Dynamic import keeps this
+  // module free of a static milestone dependency; best-effort, never blocks.
+  void import("../milestones/milestone-service")
+    .then((m) =>
+      m.evaluateMilestonesForEvent({
+        eventType: "SALE",
+        subjectUserId: user.id,
+        subjectRole: user.role,
+        process: user.process,
+        source: { type: "lead", id: input.leadCode },
+        operationalDate,
+      }),
+    )
+    .catch(() => undefined);
+}
+
+/* --------------------------- milestones -------------------------- */
+
+export interface MilestoneRecoInput {
+  /** approved recognition kind — TEAM_MILESTONE (team) or ACHIEVEMENT_UNLOCKED (individual) */
+  kind: RecognitionKind;
+  /** null for a TEAM milestone — a person is NEVER fabricated */
+  subjectUserId: number | null;
+  subjectName: string | null;
+  subjectRole: string | null;
+  subjectPhotoAvailable: boolean;
+  headline: string | null;
+  subheadline: string | null;
+  /** authoritative points ONLY when the milestone measures points; else null */
+  points: number | null;
+  /** semantic level ("LEVEL_2" …) + the Stage-1 celebration profile payload */
+  celebrationLevel: string | null;
+  celebrationProfile: Record<string, unknown> | null;
+  /** deterministic idempotency key from the Milestone Engine */
+  dedupeKey: string;
+  operationalDate: string;
+  sourceType: string | null;
+  sourceId: string | null;
+}
+
+/**
+ * Phase 10 Stage 4 — publish ONE milestone recognition moment through the
+ * EXISTING recognition path (`emit` → idempotent `office_tv_events` → the
+ * recognition bus → Office TV interrupt). It awards NO points and runs NO
+ * scoring; the caller (Milestone Engine) has already checked the authoritative
+ * threshold. Returns the published bus seq, or null when nothing was emitted
+ * (duplicate dedupe key / celebration suppressed).
+ */
+export async function recognizeMilestone(input: MilestoneRecoInput): Promise<number | null> {
+  if (!isDbConfigured()) return null;
+  const before = recognitionBus.latestSeq();
+  await emit({
+    kind: input.kind,
+    eventId: hash(input.dedupeKey),
+    subjectUserId: input.subjectUserId,
+    subjectName: input.subjectName,
+    subjectRole: input.subjectRole,
+    subjectPhotoAvailable: input.subjectPhotoAvailable,
+    headline: input.headline,
+    subheadline: input.subheadline,
+    referenceType: input.sourceType,
+    referenceId: input.sourceId,
+    dedupeKey: input.dedupeKey,
+    operationalDate: input.operationalDate,
+    celebrationLevel: input.celebrationLevel,
+    celebrationProfile: input.celebrationProfile,
+    points: input.points,
+  });
+  const after = recognitionBus.latestSeq();
+  return after > before ? after : null;
 }
 
 /* ----------------------------- helpers ---------------------------- */

@@ -35,13 +35,27 @@ const GRANT: Decision = { ok: true };
 const deny = (reason: string, code: string): Decision => ({ ok: false, reason, code });
 
 const isAdmin = (a: LeadActor) => a.user.role === "admin";
-const isHr = (a: LeadActor) => a.user.role === "hr";
+
+/**
+ * Admin UAT — Leads is an Admin operational module. HR has NO lead access
+ * (nav item removed + server denies read/list/create/update). Called by the
+ * lead list & detail services so a direct API hit still 403s.
+ */
+export function assertLeadsModuleAccess(role: string): void {
+  if (role === "hr") {
+    throw new HttpError(
+      403,
+      "Leads are an Admin operational module and are not available to HR",
+      "forbidden",
+    );
+  }
+}
 
 /* ------------------------------- read --------------------------------- */
 
-/** admin/hr → any · agent → own submissions · closer → own assignments */
+/** admin → any · agent → own submissions · closer → own assignments · HR → none */
 export function canReadLead(a: LeadActor, lead: LeadOwn): boolean {
-  if (isAdmin(a) || isHr(a)) return true;
+  if (isAdmin(a)) return true;
   if (a.user.role === "agent") return a.agentId != null && lead.agentId === a.agentId;
   if (a.user.role === "closer") return a.closerId != null && lead.assignedCloserId === a.closerId;
   return false;
@@ -102,6 +116,28 @@ export function canTransferLead(a: LeadActor, lead: LeadState): Decision {
     return GRANT;
   }
   return deny("Only an admin or the submitting agent can transfer a lead", "role_forbidden");
+}
+
+/* ----------------------------- delete -------------------------------- */
+
+/**
+ * ADMIN ONLY. A hard delete permanently removes the lead row and its
+ * duplicate-detection identity from the database. No other role — not the
+ * originating agent, not the assigned closer, not HR — may delete a lead.
+ */
+export function canDeleteLead(a: LeadActor): boolean {
+  return isAdmin(a);
+}
+
+/* ------------------ supporting-document access ---------------------- */
+
+/**
+ * Who may upload / list / download a lead's supporting documents. Same surface
+ * as read access: admin any, the originating agent, the assigned closer. HR has
+ * no lead access. Enforced server-side; the UI merely mirrors it.
+ */
+export function canAccessLeadDocuments(a: LeadActor, lead: LeadOwn): boolean {
+  return canReadLead(a, lead);
 }
 
 /* --------------------- field-level update scope ---------------------- */
@@ -179,7 +215,8 @@ export type LeadScope =
   | { kind: "none" };
 
 export function leadScope(a: LeadActor): LeadScope {
-  if (isAdmin(a) || isHr(a)) return { kind: "all" };
+  if (isAdmin(a)) return { kind: "all" };
+  if (a.user.role === "hr") return { kind: "none" }; // HR has no lead visibility
   if (a.user.role === "agent") {
     return a.agentId != null ? { kind: "agent", agentId: a.agentId } : { kind: "none" };
   }
@@ -206,4 +243,14 @@ export function assertCanUpdateLead(a: LeadActor, lead: LeadState): void {
 export function assertCanTransferLead(a: LeadActor, lead: LeadState): void {
   const d = canTransferLead(a, lead);
   if (!d.ok) throw new HttpError(403, d.reason, d.code);
+}
+export function assertCanDeleteLead(a: LeadActor): void {
+  if (!canDeleteLead(a)) {
+    throw new HttpError(403, "Only an admin can delete a lead", "forbidden");
+  }
+}
+export function assertCanAccessLeadDocuments(a: LeadActor, lead: LeadOwn): void {
+  if (!canAccessLeadDocuments(a, lead)) {
+    throw new HttpError(403, "Not authorized for this lead's documents", "forbidden");
+  }
 }

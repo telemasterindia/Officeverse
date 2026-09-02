@@ -25,9 +25,14 @@ import {
   PageHeader,
   StatusBadge,
 } from "@/components/officeverse/primitives";
-import { useLeads } from "@/lib/officeverse/use-crm";
+import { toast } from "sonner";
+import { useServerLeads } from "@/lib/officeverse/use-lead-lifecycle";
+import { useExportMyLeads } from "@/lib/officeverse/use-export";
+import { useServerStaff } from "@/lib/officeverse/use-staff";
 import { useSession } from "@/lib/officeverse/session";
-import type { LeadStatus } from "@/lib/officeverse/types";
+import type { LeadStatus, ProcessCode } from "@/lib/officeverse/types";
+
+const PROCESS_OPTS: ProcessCode[] = ["US", "IN", "UK", "AU"];
 
 export const Route = createFileRoute("/_shell/leads/")({
   head: () => ({
@@ -53,28 +58,48 @@ const STATUSES: LeadStatus[] = [
 
 function LeadsPage() {
   const { user } = useSession();
-  const leads = useLeads();
-  const [q, setQ] = useState("");
-  const [status, setStatus] = useState<string>("all");
-  const [page, setPage] = useState(0);
-  const perPage = 10;
-
   const isAgent = user?.role === "agent";
   const isCloser = user?.role === "closer";
   const isAdmin = user?.role === "admin" || user?.role === "hr";
+  const exportMine = useExportMyLeads();
 
-  // Visibility scope: an agent sees only the leads they submitted, a closer only
-  // the leads transferred to them, admin/HR see everything.
-  const scopedLeads = useMemo(() => {
-    if (!user) return [];
-    if (isAdmin) return leads;
-    if (isCloser) return leads.filter((l) => l.assigned_closer === user.name);
-    return leads.filter((l) => l.submitted_by === user.name);
-  }, [leads, user, isAdmin, isCloser]);
+  const [q, setQ] = useState("");
+  const [status, setStatus] = useState<string>("all");
+  const [processF, setProcessF] = useState<string>("all");
+  const [agentF, setAgentF] = useState<string>("all");
+  const [closerF, setCloserF] = useState<string>("all");
+  const [page, setPage] = useState(0);
+  const perPage = 10;
+
+  // Admin UAT §3/§4 — filters are applied SERVER-SIDE (role/process scope +
+  // process/agent/closer/status). The client only adds a text search on the page.
+  const { leads } = useServerLeads(
+    isAdmin
+      ? {
+          pageSize: 100,
+          ...(status !== "all" ? { status } : {}),
+          ...(processF !== "all" ? { process: processF } : {}),
+          ...(agentF !== "all" ? { agentCode: agentF } : {}),
+          ...(closerF !== "all" ? { closerCode: closerF } : {}),
+        }
+      : {},
+  );
+
+  const scopedProcess = processF !== "all" ? (processF as ProcessCode) : undefined;
+  const { staff: agentStaff } = useServerStaff(
+    "agent",
+    undefined,
+    isAdmin ? scopedProcess : undefined,
+  );
+  const { staff: closerStaff } = useServerStaff(
+    "closer",
+    undefined,
+    isAdmin ? scopedProcess : undefined,
+  );
 
   const rows = useMemo(
     () =>
-      scopedLeads.filter(
+      leads.filter(
         (l) =>
           (status === "all" || l.status === status) &&
           (q === "" ||
@@ -82,7 +107,7 @@ function LeadsPage() {
             (!isAgent && l.phone.includes(q)) ||
             l.customer_name.toLowerCase().includes(q.toLowerCase())),
       ),
-    [scopedLeads, q, status, isAgent],
+    [leads, q, status, isAgent],
   );
   const paged = rows.slice(page * perPage, page * perPage + perPage);
 
@@ -99,9 +124,27 @@ function LeadsPage() {
         }
         actions={
           <>
-            <Button variant="outline" className="rounded-full">
-              <Download className="mr-2 h-4 w-4" /> Export
-            </Button>
+            {/* Admin UAT §12 — Agents may NOT export. Closer / Admin / HR only. */}
+            {!isAgent ? (
+              <Button
+                variant="outline"
+                className="rounded-full"
+                disabled={exportMine.isPending}
+                onClick={() =>
+                  exportMine.mutate(
+                    { dataset: "leads", format: "xlsx" },
+                    {
+                      onSuccess: (r) =>
+                        toast.success(`Exported ${r.rowCount} lead${r.rowCount === 1 ? "" : "s"}`),
+                      onError: (e) => toast.error(e.message || "Export failed"),
+                    },
+                  )
+                }
+              >
+                <Download className="mr-2 h-4 w-4" />
+                {exportMine.isPending ? "Exporting…" : "Export (Excel)"}
+              </Button>
+            ) : null}
             <Button asChild className="rounded-full">
               <Link to="/leads/new">
                 <Target className="mr-2 h-4 w-4" /> New customer
@@ -112,9 +155,7 @@ function LeadsPage() {
       />
 
       <Card className="surface-panel rounded-2xl border-border/70 p-4">
-        <div
-          className={isAgent ? "relative min-w-0" : "grid gap-3 sm:grid-cols-[minmax(0,1fr)_180px]"}
-        >
+        <div className={isAgent ? "relative min-w-0" : "space-y-3"}>
           <div className="relative min-w-0">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -131,25 +172,93 @@ function LeadsPage() {
             />
           </div>
           {!isAgent ? (
-            <Select
-              value={status}
-              onValueChange={(v) => {
-                setStatus(v);
-                setPage(0);
-              }}
-            >
-              <SelectTrigger aria-label="Filter by status">
-                <SelectValue placeholder="Status" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All statuses</SelectItem>
-                {STATUSES.map((s) => (
-                  <SelectItem key={s} value={s}>
-                    {s}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <Select
+                value={status}
+                onValueChange={(v) => {
+                  setStatus(v);
+                  setPage(0);
+                }}
+              >
+                <SelectTrigger aria-label="Filter by status">
+                  <SelectValue placeholder="Status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All statuses</SelectItem>
+                  {STATUSES.map((s) => (
+                    <SelectItem key={s} value={s}>
+                      {s}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              {isAdmin ? (
+                <>
+                  <Select
+                    value={processF}
+                    onValueChange={(v) => {
+                      setProcessF(v);
+                      setAgentF("all");
+                      setCloserF("all");
+                      setPage(0);
+                    }}
+                  >
+                    <SelectTrigger aria-label="Filter by process">
+                      <SelectValue placeholder="Process" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All processes</SelectItem>
+                      {PROCESS_OPTS.map((p) => (
+                        <SelectItem key={p} value={p}>
+                          {p}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+
+                  <Select
+                    value={agentF}
+                    onValueChange={(v) => {
+                      setAgentF(v);
+                      setPage(0);
+                    }}
+                  >
+                    <SelectTrigger aria-label="Filter by agent">
+                      <SelectValue placeholder="Agent" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All agents</SelectItem>
+                      {agentStaff.map((a) => (
+                        <SelectItem key={a.code} value={a.code}>
+                          {a.full_name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+
+                  <Select
+                    value={closerF}
+                    onValueChange={(v) => {
+                      setCloserF(v);
+                      setPage(0);
+                    }}
+                  >
+                    <SelectTrigger aria-label="Filter by closer">
+                      <SelectValue placeholder="Closer" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All closers</SelectItem>
+                      {closerStaff.map((c) => (
+                        <SelectItem key={c.code} value={c.code}>
+                          {c.full_name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </>
+              ) : null}
+            </div>
           ) : null}
         </div>
       </Card>

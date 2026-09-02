@@ -80,11 +80,25 @@ describe("POST /internal/monthly-salary-slips — cron-secret gated, dry by defa
 });
 
 describe("legacy /internal/* stubs stay gated + unimplemented", () => {
-  it("/internal/tick → 401 then 501", async () => {
+  it("/internal/tick → 401 without the secret, then runs the daily jobs (503 when no DB)", async () => {
     process.env["CRON_SECRET"] = "x";
     expect((await handleInternal(req("/internal/tick", { method: "POST" })))!.status).toBe(401);
+    // authenticated: the endpoint is now implemented (UAT #15 / #16). In this
+    // unit env there is no DB, so it reports db_unavailable rather than 501.
     const ok = await handleInternal(
       req("/internal/tick", { method: "POST", headers: { "x-cron-secret": "x" } }),
+    );
+    expect(ok!.status).toBe(503);
+    expect((await ok!.json()).error).toBe("db_unavailable");
+  });
+
+  it("/internal/drain-email → 401 then 501 (delivery worker still unimplemented)", async () => {
+    process.env["CRON_SECRET"] = "x";
+    expect((await handleInternal(req("/internal/drain-email", { method: "POST" })))!.status).toBe(
+      401,
+    );
+    const ok = await handleInternal(
+      req("/internal/drain-email", { method: "POST", headers: { "x-cron-secret": "x" } }),
     );
     expect(ok!.status).toBe(501);
   });

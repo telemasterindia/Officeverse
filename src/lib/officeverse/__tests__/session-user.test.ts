@@ -38,6 +38,18 @@ describe("toSessionUser", () => {
     expect(s.role).toBe("admin"); // role still from the server payload
     expect(s.id).toBe("42");
   });
+
+  it("employeeId comes from the server's canonical employeeCode (never users.id)", () => {
+    expect(toSessionUser(pu({ employeeCode: "TMI_CC_007" })).employeeId).toBe("TMI_CC_007");
+    expect(toSessionUser(pu({ role: "closer", employeeCode: "TMI_CL_002" })).employeeId).toBe(
+      "TMI_CL_002",
+    );
+    // no staff record → blank, and NEVER the numeric users.id
+    const noCode = toSessionUser(pu({ employeeCode: null }));
+    expect(noCode.employeeId).toBe("");
+    expect(noCode.employeeId).not.toBe("42");
+    expect(toSessionUser(pu()).employeeId).toBe(""); // absent field → blank
+  });
 });
 
 describe("initialsOf", () => {

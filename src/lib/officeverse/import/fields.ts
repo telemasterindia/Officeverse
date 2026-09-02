@@ -113,7 +113,7 @@ export const LEAD_FIELDS: FieldDef[] = [
     label: "Agent ID (Admin only)",
     requiredIn: [],
     aliases: ["agentcode", "agent", "agentid", "owner", "ownercode", "submittedby"],
-    example: "AG-00001",
+    example: "TMI_CC_001",
     note: "Admin only. Ignored/validated for Agent imports (ownership is forced to the importer).",
   },
   {
@@ -121,7 +121,7 @@ export const LEAD_FIELDS: FieldDef[] = [
     label: "Closer ID",
     requiredIn: [],
     aliases: ["closercode", "closer", "closerid", "assignedcloser"],
-    example: "CL-00001",
+    example: "TMI_CL_001",
   },
   {
     key: "import_ref",
@@ -188,7 +188,7 @@ export const FOLLOWUP_FIELDS: FieldDef[] = [
     label: "Follow-up closer ID",
     requiredIn: [],
     aliases: ["followupclosercode", "followupcloser", "fucloser"],
-    example: "CL-00001",
+    example: "TMI_CL_001",
     note: "Required when the follow-up owner role is closer.",
   },
   {

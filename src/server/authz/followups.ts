@@ -12,7 +12,7 @@
  *   - CONVERT-to-Lead: the OWNER (agent or closer) may convert their own active
  *     follow-up; ADMIN may convert any active follow-up. The resulting Lead's
  *     ownership mirrors the follow-up owner's role (see conversionOwnershipPlan).
- *   - admin/hr may READ any follow-up + its history. They are NOT granted the
+ *   - admin may READ any follow-up + its history. They are NOT granted the
  *     other owner-only actions (customer edit, reschedule, complete, cancel).
  *   - Closers are not granted follow-up visibility just for being closers — only
  *     follow-ups they own. A converted Lead is governed by Lead authorization.
@@ -30,7 +30,10 @@ export type Decision = { ok: true } | { ok: false; reason: string; code: string 
 const GRANT: Decision = { ok: true };
 const deny = (reason: string, code: string): Decision => ({ ok: false, reason, code });
 
-const isAdmin = (a: FollowUpActor) => a.user.role === "admin" || a.user.role === "hr";
+// Admin UAT — Follow-ups is an Admin operational module. HR has NO follow-up
+// access (nav item removed + server denies read/list/history). Agents & Closers
+// see only their own.
+const isAdmin = (a: FollowUpActor) => a.user.role === "admin";
 const isOwner = (a: FollowUpActor, fu: Pick<FollowUp, "ownerUserId">) =>
   fu.ownerUserId === a.user.id;
 
@@ -41,7 +44,22 @@ export function isTerminal(status: FollowUp["status"]): boolean {
 
 /* -------------------------------- read ------------------------------- */
 
-/** owner → own · admin/hr → any · everyone else → no */
+/**
+ * Admin UAT — Follow-ups is an Admin operational module. HR has NO access.
+ * Called by the follow-up list service so a direct API hit still 403s (the
+ * detail / history paths already deny HR via `canReadFollowUp`).
+ */
+export function assertFollowUpsModuleAccess(role: string): void {
+  if (role === "hr") {
+    throw new HttpError(
+      403,
+      "Follow-ups are an Admin operational module and are not available to HR",
+      "forbidden",
+    );
+  }
+}
+
+/** owner → own · admin → any · HR / everyone else → no */
 export function canReadFollowUp(a: FollowUpActor, fu: Pick<FollowUp, "ownerUserId">): boolean {
   return isAdmin(a) || isOwner(a, fu);
 }
@@ -253,7 +271,7 @@ export const assertCanCancelFollowUp = (a: FollowUpActor, fu: FUOwnerStatus) =>
 export const assertCanConvertFollowUp = (a: FollowUpActor, fu: FUOwnerStatus) =>
   assertDecision(canConvertFollowUp(a, fu));
 
-/** List scope: owner → own; admin/hr → all (optionally filtered by owner). */
+/** List scope: owner → own; admin → all (optionally filtered by owner); HR → none. */
 export type FollowUpScope = { kind: "all" } | { kind: "owner"; ownerUserId: number };
 export function followUpScope(a: FollowUpActor): FollowUpScope {
   return isAdmin(a) ? { kind: "all" } : { kind: "owner", ownerUserId: a.user.id };

@@ -1,6 +1,16 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { AlertTriangle, CalendarClock, CalendarDays, CheckCircle2, List, Plus } from "lucide-react";
+import {
+  AlertTriangle,
+  CalendarClock,
+  CalendarDays,
+  CheckCircle2,
+  Download,
+  List,
+  Plus,
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
+import { useExportMyLeads } from "@/lib/officeverse/use-export";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { Card } from "@/components/ui/card";
@@ -21,20 +31,20 @@ import {
   PageHeader,
 } from "@/components/officeverse/primitives";
 import { FollowUpStatusBadge } from "@/components/officeverse/follow-up-detail";
-import { AGENTS, CLOSERS } from "@/lib/officeverse/data";
 import {
   bucketOf,
   displayDate,
   displayTime,
-  resolveCustomer,
   scheduledParts,
-  visibleFollowUps,
   type FollowUpBucket,
-  type FollowUpRecord,
 } from "@/lib/officeverse/followups";
-import { useFollowUps } from "@/lib/officeverse/use-crm";
+import { useServerFollowUps, type UiFollowUp } from "@/lib/officeverse/use-lead-lifecycle";
+import { useServerStaff } from "@/lib/officeverse/use-staff";
 import { useSession } from "@/lib/officeverse/session";
 import { cn } from "@/lib/utils";
+import type { ProcessCode } from "@/lib/officeverse/types";
+
+const FU_PROCESS_OPTS: ProcessCode[] = ["US", "IN", "UK", "AU"];
 
 export const Route = createFileRoute("/_shell/followups/")({
   validateSearch: (s: Record<string, unknown>): { fu?: string } =>
@@ -58,8 +68,8 @@ function ymd(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-function FollowUpCard({ f }: { f: FollowUpRecord }) {
-  const cust = resolveCustomer(f);
+function FollowUpCard({ f }: { f: UiFollowUp }) {
+  const cust = { name: f.customer_name, phone: f.phone };
   return (
     <Card
       className={cn(
@@ -104,23 +114,42 @@ function FollowUpsPage() {
   const { user } = useSession();
   const navigate = useNavigate();
   const search = Route.useSearch();
-  const all = useFollowUps();
 
   const [view, setView] = useState<"list" | "calendar">("list");
-  const [ownerFilter, setOwnerFilter] = useState("all");
   const [selectedDay, setSelectedDay] = useState<Date>(new Date());
 
   const isAdmin = user?.role === "admin" || user?.role === "hr";
+  const isAgent = user?.role === "agent";
+  const exportMine = useExportMyLeads();
 
-  // Role scope: agents/closers see their own; admins see everything.
-  const scoped = useMemo(() => {
-    if (!user) return [];
-    const base = visibleFollowUps(all, user);
-    if (isAdmin && ownerFilter !== "all") {
-      return base.filter((f) => f.owner_name === ownerFilter);
-    }
-    return base;
-  }, [all, user, isAdmin, ownerFilter]);
+  // Admin UAT §3/§4 — filter follow-ups by process / agent / closer SERVER-SIDE.
+  const [processF, setProcessF] = useState<string>("all");
+  const [agentF, setAgentF] = useState<string>("all");
+  const [closerF, setCloserF] = useState<string>("all");
+  const scopedProcess = processF !== "all" ? (processF as ProcessCode) : undefined;
+
+  const { staff: agentStaff } = useServerStaff(
+    "agent",
+    undefined,
+    isAdmin ? scopedProcess : undefined,
+  );
+  const { staff: closerStaff } = useServerStaff(
+    "closer",
+    undefined,
+    isAdmin ? scopedProcess : undefined,
+  );
+
+  const { followUps: all } = useServerFollowUps(
+    isAdmin
+      ? {
+          ...(processF !== "all" ? { process: processF } : {}),
+          ...(agentF !== "all" ? { agentCode: agentF } : {}),
+          ...(closerF !== "all" ? { closerCode: closerF } : {}),
+        }
+      : {},
+  );
+
+  const scoped = all;
 
   const live = useMemo(() => scoped.filter((f) => f.status !== "CANCELLED"), [scoped]);
 
@@ -162,11 +191,36 @@ function FollowUpsPage() {
             : "Your scheduled callbacks — on your board and calendar. Each one opens its full record."
         }
         actions={
-          <Button asChild className="rounded-lg">
-            <Link to="/leads/new" search={{ action: "followup" }}>
-              <Plus className="mr-1.5 h-4 w-4" /> New follow-up
-            </Link>
-          </Button>
+          <>
+            {/* Admin UAT §12 — Agents may NOT export. Closer / Admin / HR only. */}
+            {!isAgent ? (
+              <Button
+                variant="outline"
+                className="rounded-lg"
+                disabled={exportMine.isPending}
+                onClick={() =>
+                  exportMine.mutate(
+                    { dataset: "followups", format: "xlsx" },
+                    {
+                      onSuccess: (r) =>
+                        toast.success(
+                          `Exported ${r.rowCount} follow-up${r.rowCount === 1 ? "" : "s"}`,
+                        ),
+                      onError: (e) => toast.error(e.message || "Export failed"),
+                    },
+                  )
+                }
+              >
+                <Download className="mr-1.5 h-4 w-4" />
+                {exportMine.isPending ? "Exporting…" : "Export (Excel)"}
+              </Button>
+            ) : null}
+            <Button asChild className="rounded-lg">
+              <Link to="/leads/new" search={{ action: "followup" }}>
+                <Plus className="mr-1.5 h-4 w-4" /> New follow-up
+              </Link>
+            </Button>
+          </>
         }
       />
 
@@ -218,30 +272,54 @@ function FollowUpsPage() {
         </div>
 
         {isAdmin ? (
-          <Select value={ownerFilter} onValueChange={setOwnerFilter}>
-            <SelectTrigger className="w-[220px]" aria-label="Filter by follow-up owner">
-              <SelectValue placeholder="Follow-up for" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All owners</SelectItem>
-              <SelectGroup>
-                <SelectLabel>Agents</SelectLabel>
-                {AGENTS.map((n) => (
-                  <SelectItem key={n} value={n}>
-                    {n} — Agent
+          <div className="flex flex-wrap gap-2">
+            <Select
+              value={processF}
+              onValueChange={(v) => {
+                setProcessF(v);
+                setAgentF("all");
+                setCloserF("all");
+              }}
+            >
+              <SelectTrigger className="w-[130px]" aria-label="Filter by process">
+                <SelectValue placeholder="Process" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All processes</SelectItem>
+                {FU_PROCESS_OPTS.map((p) => (
+                  <SelectItem key={p} value={p}>
+                    {p}
                   </SelectItem>
                 ))}
-              </SelectGroup>
-              <SelectGroup>
-                <SelectLabel>Closers</SelectLabel>
-                {CLOSERS.map((n) => (
-                  <SelectItem key={n} value={n}>
-                    {n} — Closer
+              </SelectContent>
+            </Select>
+            <Select value={agentF} onValueChange={setAgentF}>
+              <SelectTrigger className="w-[170px]" aria-label="Filter by agent">
+                <SelectValue placeholder="Agent" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All agents</SelectItem>
+                {agentStaff.map((a) => (
+                  <SelectItem key={a.code} value={a.code}>
+                    {a.full_name}
                   </SelectItem>
                 ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
+              </SelectContent>
+            </Select>
+            <Select value={closerF} onValueChange={setCloserF}>
+              <SelectTrigger className="w-[170px]" aria-label="Filter by closer">
+                <SelectValue placeholder="Closer" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All closers</SelectItem>
+                {closerStaff.map((c) => (
+                  <SelectItem key={c.code} value={c.code}>
+                    {c.full_name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         ) : (
           <span className="inline-flex items-center gap-2 rounded-lg border border-border bg-secondary/50 px-3 py-1.5 text-xs font-semibold text-muted-foreground">
             Showing your follow-ups

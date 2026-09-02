@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { UserPlus } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -25,27 +25,38 @@ import {
 } from "@/components/ui/table";
 import { EmptyState, PageHeader } from "@/components/officeverse/primitives";
 import { RoleGate } from "@/components/officeverse/role-gate";
-import { CLIENT_STATUSES, updateClient, type ClientRecord } from "@/lib/officeverse/clients";
-import { useClients } from "@/lib/officeverse/use-crm";
+import {
+  useServerClients,
+  useUpdateServerClient,
+  type ClientDTO,
+} from "@/lib/officeverse/use-clients";
 
 export const Route = createFileRoute("/_shell/clients/")({
   head: () => ({
     meta: [
-      { title: "Client List — TeleMaster India" },
+      { title: "Client List — TMI Officeverse CRM" },
       { name: "description", content: "Every client organisation — contact and status." },
     ],
   }),
   component: () => (
-    <RoleGate allow={["admin"]}>
+    <RoleGate allow={["admin", "hr"]}>
       <ClientListPage />
     </RoleGate>
   ),
 });
 
-function statusTone(s: ClientRecord["status"]): string {
-  if (s === "Active") return "bg-success/12 text-success border-success/25";
-  if (s === "Prospect") return "bg-info/12 text-info border-info/25";
-  if (s === "Closed") return "bg-destructive/12 text-destructive border-destructive/30";
+const STATUS_OPTS = ["active", "prospect", "inactive", "closed"] as const;
+const STATUS_LABEL: Record<string, string> = {
+  active: "Active",
+  prospect: "Prospect",
+  inactive: "Inactive",
+  closed: "Closed",
+};
+
+function statusTone(s: string): string {
+  if (s === "active") return "bg-success/12 text-success border-success/25";
+  if (s === "prospect") return "bg-info/12 text-info border-info/25";
+  if (s === "closed") return "bg-destructive/12 text-destructive border-destructive/30";
   return "bg-muted text-muted-foreground border-border";
 }
 
@@ -53,12 +64,13 @@ function ClientDetailDialog({
   client,
   onOpenChange,
 }: {
-  client: ClientRecord | null;
+  client: ClientDTO | null;
   onOpenChange: (v: boolean) => void;
 }) {
-  const [status, setStatus] = useState<ClientRecord["status"]>("Prospect");
+  const [status, setStatus] = useState<string>("prospect");
   const [phone, setPhone] = useState("");
   const [address, setAddress] = useState("");
+  const updateM = useUpdateServerClient();
 
   useEffect(() => {
     if (client) {
@@ -70,17 +82,26 @@ function ClientDetailDialog({
 
   if (!client) return null;
 
-  const save = () => {
-    updateClient(client.id, { status, phone: phone.trim(), address: address.trim() });
-    toast.success("Client updated");
-    onOpenChange(false);
+  const save = async () => {
+    try {
+      await updateM.mutateAsync({
+        code: client.code,
+        status: status as ClientDTO["status"],
+        phone: phone.trim(),
+        address: address.trim(),
+      });
+      toast.success("Client updated");
+      onOpenChange(false);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Update failed");
+    }
   };
 
   const rows: [string, string][] = [
-    ["Client ID", client.id],
+    ["Client ID", client.code],
     ["Name", client.name],
     ["Contact", client.contact_name || "—"],
-    ["Email", client.email],
+    ["Email", client.email || "—"],
     ["Registered", client.registered_on],
   ];
 
@@ -88,7 +109,7 @@ function ClientDetailDialog({
     <Dialog open={client != null} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[92vh] max-w-lg overflow-y-auto rounded-2xl">
         <h2 className="font-display text-lg font-bold">{client.name}</h2>
-        <p className="text-xs text-muted-foreground">Client · {client.id}</p>
+        <p className="text-xs text-muted-foreground">Client · {client.code}</p>
 
         <div className="mt-4 divide-y divide-border/70">
           {rows.map(([k, v]) => (
@@ -107,14 +128,14 @@ function ClientDetailDialog({
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="cl-status">Status</Label>
-              <Select value={status} onValueChange={(v) => setStatus(v as ClientRecord["status"])}>
+              <Select value={status} onValueChange={setStatus}>
                 <SelectTrigger id="cl-status">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {CLIENT_STATUSES.map((s) => (
+                  {STATUS_OPTS.map((s) => (
                     <SelectItem key={s} value={s}>
-                      {s}
+                      {STATUS_LABEL[s]}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -131,7 +152,7 @@ function ClientDetailDialog({
           <Button variant="ghost" className="rounded-lg" onClick={() => onOpenChange(false)}>
             Close
           </Button>
-          <Button className="rounded-lg" onClick={save}>
+          <Button className="rounded-lg" onClick={save} disabled={updateM.isPending}>
             Save changes
           </Button>
         </div>
@@ -141,21 +162,9 @@ function ClientDetailDialog({
 }
 
 function ClientListPage() {
-  const clients = useClients();
   const [q, setQ] = useState("");
-  const [detail, setDetail] = useState<ClientRecord | null>(null);
-
-  const rows = useMemo(() => {
-    const s = q.trim().toLowerCase();
-    return clients.filter(
-      (c) =>
-        !s ||
-        c.name.toLowerCase().includes(s) ||
-        c.email.toLowerCase().includes(s) ||
-        c.contact_name.toLowerCase().includes(s) ||
-        c.id.toLowerCase().includes(s),
-    );
-  }, [clients, q]);
+  const { clients: rows, isLoading } = useServerClients(q.trim() || undefined);
+  const [detail, setDetail] = useState<ClientDTO | null>(null);
 
   return (
     <div className="space-y-6">
@@ -183,8 +192,12 @@ function ClientListPage() {
       {rows.length === 0 ? (
         <EmptyState
           emoji="🏢"
-          title="No clients"
-          message="Create your first client to get started."
+          title={isLoading ? "Loading…" : "No clients"}
+          message={
+            isLoading
+              ? "Fetching the client directory."
+              : "Create your first client to get started."
+          }
           action={
             <Button asChild className="rounded-full">
               <Link to="/clients/new">Create client</Link>
@@ -208,13 +221,13 @@ function ClientListPage() {
               </TableHeader>
               <TableBody>
                 {rows.map((c) => (
-                  <TableRow key={c.id}>
+                  <TableRow key={c.code}>
                     <TableCell>
                       <p className="font-medium">{c.name}</p>
-                      <p className="text-xs text-muted-foreground">{c.id}</p>
+                      <p className="text-xs text-muted-foreground">{c.code}</p>
                     </TableCell>
                     <TableCell className="text-muted-foreground">{c.contact_name || "—"}</TableCell>
-                    <TableCell className="text-muted-foreground">{c.email}</TableCell>
+                    <TableCell className="text-muted-foreground">{c.email || "—"}</TableCell>
                     <TableCell className="whitespace-nowrap text-muted-foreground">
                       {c.phone || "—"}
                     </TableCell>
@@ -226,7 +239,7 @@ function ClientListPage() {
                         variant="outline"
                         className={`rounded-full border ${statusTone(c.status)}`}
                       >
-                        {c.status}
+                        {STATUS_LABEL[c.status] ?? c.status}
                       </Badge>
                     </TableCell>
                     <TableCell className="text-right">

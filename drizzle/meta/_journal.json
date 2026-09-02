@@ -99,6 +99,97 @@
       "when": 1788042619671,
       "tag": "0013_office_networks_ip_presence",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "5",
+      "when": 1788126696953,
+      "tag": "0014_scoring_engine_foundation",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "5",
+      "when": 1788136614213,
+      "tag": "0015_company_profile_branding",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "5",
+      "when": 1788137474983,
+      "tag": "0016_payroll_late_units",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "5",
+      "when": 1788162562349,
+      "tag": "0017_shift_overrides_joining_date_slip_snapshot",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "5",
+      "when": 1788189995986,
+      "tag": "0018_incentive_engine",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "5",
+      "when": 1788193518341,
+      "tag": "0019_celebration_profiles",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "5",
+      "when": 1788194911241,
+      "tag": "0020_announcement_audio",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "5",
+      "when": 1788204461631,
+      "tag": "0021_milestones",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "5",
+      "when": 1788209742382,
+      "tag": "0022_lead_documents",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "5",
+      "when": 1788221468157,
+      "tag": "0023_follow_up_reassignments",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "5",
+      "when": 1788253479748,
+      "tag": "0024_staff_anniversary",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "5",
+      "when": 1788260000000,
+      "tag": "0025_canonical_employee_codes",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "5",
+      "when": 1788273609139,
+      "tag": "0026_hr_policies",
+      "breakpoints": true
     }
   ]
 }

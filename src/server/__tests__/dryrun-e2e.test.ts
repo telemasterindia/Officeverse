@@ -187,22 +187,37 @@ describe("Phase 18 dry run — one deterministic DRYRUN employee, full chain", (
     const fileName = sanitizeSlipFilename(MONTH, DRYRUN_NAME, DRYRUN_USER_ID);
     expect(fileName).toBe("Officeverse_Salary_Slip_2026-08_DRYRUN_Test_Employee.pdf");
 
-    const pdf = renderSalarySlipPdf({
+    const slipPdfInput = {
+      companyName: "TMI Officeverse",
+      companyLegalName: null,
+      companyAddress: null,
+      companyTaxId: null,
+      companyFooter: null,
+      logo: null,
       employeeName: DRYRUN_NAME,
+      employeeCode: "TMI_CC001",
       userId: DRYRUN_USER_ID,
+      joiningDate: "2026-07-01",
       process: run.process,
       periodMonth: MONTH,
       baseSalary: snap.baseSalary,
+      payableBaseSalary: snap.payableBaseSalary,
       regularityBonus: snap.regularityBonus,
       calculatedSalary: snap.calculatedSalary,
       leaveCount: snap.leaveCount,
       offCount: snap.offCount,
+      unpaidLeaveDays: snap.unpaidLeaveDays,
+      lateShortCount: snap.lateShortCount,
+      lateFullCount: snap.lateFullCount,
+      lateUnits: snap.lateUnits,
+      lateDeduction: snap.lateDeduction,
       payrollStatus: "LOCKED",
       calculationVersion: snap.calculationVersion,
       slipVersion: 1,
       isPreview: false,
       generatedAt: "2026-09-01 10:00:00",
-    });
+    };
+    const pdf = renderSalarySlipPdf(slipPdfInput);
     const text = new TextDecoder().decode(pdf);
     expect(text.startsWith("%PDF-1.4")).toBe(true);
     expect(text).toContain("30,000.00");
@@ -222,22 +237,7 @@ describe("Phase 18 dry run — one deterministic DRYRUN employee, full chain", (
     const got = await store.get(key);
     expect(got && sha256Hex(got) === sha).toBe(true);
     // re-render from the same snapshot → byte-identical (immutable content)
-    const pdf2 = renderSalarySlipPdf({
-      employeeName: DRYRUN_NAME,
-      userId: DRYRUN_USER_ID,
-      process: run.process,
-      periodMonth: MONTH,
-      baseSalary: snap.baseSalary,
-      regularityBonus: snap.regularityBonus,
-      calculatedSalary: snap.calculatedSalary,
-      leaveCount: snap.leaveCount,
-      offCount: snap.offCount,
-      payrollStatus: "LOCKED",
-      calculationVersion: snap.calculationVersion,
-      slipVersion: 1,
-      isPreview: false,
-      generatedAt: "2026-09-01 10:00:00",
-    });
+    const pdf2 = renderSalarySlipPdf(slipPdfInput);
     expect(sha256Hex(pdf2)).toBe(sha);
     expect(slipSnapshotEquals(snap, buildSlipSnapshot(run))).toBe(true);
   });

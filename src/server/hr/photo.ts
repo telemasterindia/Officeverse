@@ -14,7 +14,7 @@
 export const PHOTO_ACCEPTED_MIME = ["image/jpeg", "image/png", "image/webp"] as const;
 export type PhotoMime = (typeof PHOTO_ACCEPTED_MIME)[number];
 
-export const PHOTO_MAX_BYTES_DEFAULT = 3 * 1024 * 1024; // 3 MB hard ceiling
+export const PHOTO_MAX_BYTES_DEFAULT = 5 * 1024 * 1024; // 5 MB (Admin UAT Batch-2 §2)
 export const PHOTO_MIN_DIMENSION = 48;
 export const PHOTO_MAX_DIMENSION = 4096;
 

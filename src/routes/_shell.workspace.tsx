@@ -24,13 +24,13 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { EmptyState, MetricCard, StatusBadge } from "@/components/officeverse/primitives";
 import { FloatingPanel } from "@/components/officeverse/floating-panel";
 import { WorkspaceHero } from "@/components/officeverse/workspace-hero";
-import { LEADS, LEAD_STATUS_MIX, SUBMISSION_TREND } from "@/lib/officeverse/data";
-import { bucketOf, displayTime, visibleFollowUps } from "@/lib/officeverse/followups";
-import { useFollowUps } from "@/lib/officeverse/use-crm";
+import { bucketOf, displayTime } from "@/lib/officeverse/followups";
+import { useServerFollowUps, useServerLeads } from "@/lib/officeverse/use-lead-lifecycle";
 import { useSession } from "@/lib/officeverse/session";
 
 export const Route = createFileRoute("/_shell/workspace")({
@@ -72,21 +72,45 @@ function greeting() {
 
 function WorkspacePage() {
   const { user } = useSession();
-  const allFollowUps = useFollowUps();
-  if (!user) return null;
-  const first = user.name.split(" ")[0] ?? user.name;
+  // Authoritative, server-scoped: an Agent sees only their own leads /
+  // follow-ups; a Closer only those assigned to them.
+  const { followUps } = useServerFollowUps({ pageSize: 100 });
+  const { leads } = useServerLeads({ pageSize: 100 });
 
-  // This agent's own follow-ups, bucketed by the live schedule vs now.
-  const mine = visibleFollowUps(allFollowUps, user).filter((f) => f.status !== "CANCELLED");
+  const mine = useMemo(() => followUps.filter((f) => f.status !== "CANCELLED"), [followUps]);
   const todays = mine.filter((f) => bucketOf(f) === "TODAY");
   const upcoming = mine.filter((f) => bucketOf(f) === "UPCOMING");
   const overdue = mine.filter((f) => bucketOf(f) === "OVERDUE");
   const completed = mine.filter((f) => bucketOf(f) === "COMPLETED");
-  const newLeads = LEADS.filter((l) => l.status === "NEW");
-  const pipeline = LEADS.slice(0, 6);
+  const newLeads = leads.filter((l) => l.status === "NEW");
+  const pipeline = leads.slice(0, 6);
 
-  // Pose reflects what's already on screen — no business event, no new state.
-  const pose = overdue.length > 0 ? "concerned" : todays.length > 0 ? "working" : "happy";
+  const statusMix = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const l of leads) m.set(l.status, (m.get(l.status) ?? 0) + 1);
+    return [...m.entries()].map(([name, value]) => ({ name, value }));
+  }, [leads]);
+
+  const weekTrend = useMemo(() => {
+    const days: { day: string; leads: number; followUps: number }[] = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const key = d.toISOString().slice(0, 10);
+      days.push({
+        day: d.toLocaleDateString("en-GB", { weekday: "short" }),
+        leads: leads.filter((l) => (l.created_at ?? "").slice(0, 10) === key).length,
+        followUps: mine.filter(
+          (f) => f.status === "COMPLETED" && (f.completed_at ?? "").slice(0, 10) === key,
+        ).length,
+      });
+    }
+    return days;
+  }, [leads, mine]);
+
+  if (!user) return null;
+  const first = user.name.split(" ")[0] ?? user.name;
+
   const message =
     overdue.length > 0
       ? `${overdue.length} follow-up${overdue.length > 1 ? "s" : ""} slipped past due. Clear those first, then work today's board.`
@@ -96,13 +120,7 @@ function WorkspacePage() {
 
   return (
     <div className="space-y-6 lg:space-y-8">
-      <WorkspaceHero
-        greeting={greeting()}
-        name={first}
-        process={user.process}
-        pose={pose}
-        message={message}
-      />
+      <WorkspaceHero greeting={greeting()} name={first} process={user.process} message={message} />
 
       {/* TODAY — headline numbers, all from FOLLOW_UPS / LEADS */}
       <section>
@@ -187,14 +205,14 @@ function WorkspacePage() {
           <ResponsiveContainer width="100%" height={200}>
             <PieChart>
               <Pie
-                data={LEAD_STATUS_MIX}
+                data={statusMix}
                 dataKey="value"
                 nameKey="name"
                 innerRadius={48}
                 outerRadius={78}
                 paddingAngle={3}
               >
-                {LEAD_STATUS_MIX.map((_, i) => (
+                {statusMix.map((_, i) => (
                   <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} stroke="transparent" />
                 ))}
               </Pie>
@@ -202,7 +220,7 @@ function WorkspacePage() {
             </PieChart>
           </ResponsiveContainer>
           <ul className="mt-2 grid grid-cols-2 gap-1.5 text-xs">
-            {LEAD_STATUS_MIX.map((s, i) => (
+            {statusMix.map((s, i) => (
               <li key={s.name} className="flex items-center gap-2 text-muted-foreground">
                 <span
                   className="h-2.5 w-2.5 shrink-0 rounded-full"
@@ -351,7 +369,7 @@ function WorkspacePage() {
         icon={Activity}
       >
         <ResponsiveContainer width="100%" height={260}>
-          <AreaChart data={SUBMISSION_TREND}>
+          <AreaChart data={weekTrend}>
             <defs>
               <linearGradient id="wsA" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor="var(--chart-1)" stopOpacity={0.5} />

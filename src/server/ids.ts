@@ -1,11 +1,14 @@
 /**
  * Officeverse — canonical business identifiers + idempotency dedupe keys.
  *
- * Business ID conventions are preserved exactly from the current app:
+ * Business ID conventions:
  *   Lead       "TMI_00012345"   (leads.ts nextLeadId — start 12000, step +7)
  *   Follow-up  "FU_00004415"    (followups.ts nextId — start 4400, step +3)
- *   Agent      "AG-00001"
- *   Closer     "CL-00001"
+ *   Agent      "TMI_CC_001"     (canonical Employee ID, server-generated,
+ *                                sequential; legacy "TMI_CC###" / "AG-#####"
+ *                                codes still resolve but no new ones are minted)
+ *   Closer     "TMI_CL_001"     (canonical Employee ID; legacy "CL-#####" still
+ *                                resolves)
  *   Client     "CLT-00001"
  *
  * Dedupe keys follow the exact shapes named in the spec (Phase 4 & 6):
@@ -31,16 +34,35 @@ export function numericPart(code: string): number {
 
 export const leadCode = (seq: number): string => `TMI_${pad(seq, 8)}`;
 export const followUpCode = (seq: number): string => `FU_${pad(seq, 8)}`;
-export const agentCode = (seq: number): string => `AG-${pad(seq, 5)}`;
-export const closerCode = (seq: number): string => `CL-${pad(seq, 5)}`;
+/** Canonical Agent Employee ID: "TMI_CC_001", "TMI_CC_002", … */
+export const agentCode = (seq: number): string => `TMI_CC_${pad(seq, 3)}`;
+/** Canonical Closer Employee ID: "TMI_CL_001", "TMI_CL_002", … */
+export const closerCode = (seq: number): string => `TMI_CL_${pad(seq, 3)}`;
 export const clientCode = (seq: number): string => `CLT-${pad(seq, 5)}`;
+
+/** Shared canonical/legacy Employee-ID matchers (single source of truth). */
+export {
+  AGENT_CODE_RE,
+  CLOSER_CODE_RE,
+  AGENT_CODE_CANONICAL_RE,
+  CLOSER_CODE_CANONICAL_RE,
+  isAgentCode,
+  isCloserCode,
+} from "@/lib/officeverse/staff-codes";
 
 /** Next Lead sequence given the current max numeric part (mirrors nextLeadId). */
 export const nextLeadSeq = (maxNumeric: number): number => (maxNumeric || 12000) + 7;
 /** Next Follow-up sequence given the current max numeric part. */
 export const nextFollowUpSeq = (maxNumeric: number): number => (maxNumeric || 4397) + 3;
-/** Next Agent/Closer/Client sequence given the current max numeric part. */
-export const nextStaffSeq = (maxNumeric: number): number => (maxNumeric || 0) + 1;
+/**
+ * Next Agent/Closer/Client sequence = (highest existing numeric suffix) + 1.
+ * `Number(...)` coercion is deliberate: a MySQL `MAX(CAST(... AS UNSIGNED))`
+ * comes back from mysql2 as a STRING, and `"10" + 1` would concatenate to
+ * `"101"` — silently corrupting every generated code. Never `MAX(id)`, and
+ * never "first unused" — an issued code is a permanent identity.
+ */
+export const nextStaffSeq = (maxNumeric: number | string | null | undefined): number =>
+  (Number(maxNumeric) || 0) + 1;
 
 /* ------------------------------ dedupe keys ----------------------------- */
 

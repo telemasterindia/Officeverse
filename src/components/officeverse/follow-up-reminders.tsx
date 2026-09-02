@@ -1,64 +1,47 @@
 import { useNavigate } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
 import { AlarmClock, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { claimOnce, queueEmail } from "@/lib/officeverse/alerts";
-import { renderCloserEmail, renderShiftEmail } from "@/lib/officeverse/email-templates";
+import { claimOnce } from "@/lib/officeverse/alerts";
 import {
-  closerEmailKey,
   displayTime,
-  followUpsForNextShift,
   liveReminderThreshold,
-  loadFollowUps,
   minutesUntil,
-  nextShiftStart,
   reminderKey,
-  resolveCustomer,
-  seedDemoReminders,
-  shiftEmailKey,
-  SHIFT_EMAIL_LEAD_MINUTES,
-  visibleFollowUps,
   type FollowUpRecord,
 } from "@/lib/officeverse/followups";
+import { listFollowUpsFn } from "@/lib/officeverse/followup-fns";
 import { useSession } from "@/lib/officeverse/session";
 
 const SCAN_MS = 15_000;
 
-type ActiveReminder = { fu: FollowUpRecord; threshold: number } | null;
+type Fu = {
+  follow_up_id: string;
+  scheduled_at: string;
+  status: string;
+  customer_name: string;
+  phone: string;
+  comment: string | null;
+  lead_id: string | null;
+};
+type ActiveReminder = { fu: Fu; threshold: number } | null;
 
 /**
- * ┌─────────────────────────────────────────────────────────────────────────┐
- * │ DEVELOPMENT / DEMO REMINDER ENGINE — NOT PRODUCTION-GRADE.               │
- * │                                                                         │
- * │ Phase 6: this engine NO LONGER writes to any notification feed. The      │
- * │ DB-backed notification system (Phase 5 service + Phase 6 UI) is the      │
- * │ single source of truth, and time-based reminder generation belongs to   │
- * │ the future server scheduler. What remains here is an ephemeral on-screen │
- * │ toast + floating card and the isolated localStorage email-outbox demo.  │
- * │                                                                         │
- * │ This build has NO backend scheduler. Reminders therefore run ONLY while │
- * │ a CRM tab is open, driven by a 15s setInterval. If every tab is closed  │
- * │ at the reminder time, that reminder is skipped (the OVERDUE state still │
- * │ shows on the board). Do not treat this as reliable delivery.            │
- * │                                                                         │
- * │ The business logic is deliberately isolated so it can move server-side  │
- * │ unchanged: `scanForReminders(user, now)` is pure over the follow-up     │
- * │ store, thresholds/labels/dedupe keys are data, and every "send" is a    │
- * │ `queueEmail(...)` into the outbox. A cron/worker would call the same    │
- * │ derivation and forward the outbox to a mail provider.                   │
- * └─────────────────────────────────────────────────────────────────────────┘
+ * In-CRM follow-up reminder — an ephemeral toast + a non-blocking floating
+ * card fired 15 / 3 / 1 minutes before a SCHEDULED follow-up.
  *
- * Per follow-up, per open session:
- *   • 15 / 3 / 1-minute in-CRM notification + toast, each fired at most once
- *     (dedupe key = follow-up id · threshold · scheduled_at, persisted in
- *     localStorage). Reschedule → new scheduled_at → new keys → re-armed.
- *     Cancel / complete → status ≠ SCHEDULED → dropped from the scan.
- *   • ≤ 3-minute: a prominent, NON-blocking reminder card (no overlay).
- *   • CLOSER follow-up: ONE email to the closer (dedupe key =
- *     followup_id · "closer" · scheduled_at). Never sent to the agent.
- *   • 4 hours before the user's next shift: ONE shift-summary email
- *     (dedupe key = user_id · shift_start_date · "shift").
+ * AUTHORITATIVE SOURCE: the server follow-up list (`listFollowUpsFn`), polled
+ * every 15s and already scoped to this user (an Agent sees only their own, a
+ * Closer only theirs). This component only *renders* reminders — it never
+ * writes business state. The per-session "don't toast twice" dedupe lives in
+ * localStorage (`claimOnce`) and is UI-only.
+ *
+ * NOT a delivery guarantee: it runs only while a tab is open. Reliable,
+ * time-based reminder + email delivery is the server scheduler's job
+ * (`/internal/tick`, a future phase); the isolated localStorage email-outbox
+ * demo that used to live here has been removed.
  */
 export function FollowUpReminders() {
   const { user } = useSession();
@@ -66,72 +49,53 @@ export function FollowUpReminders() {
   const [active, setActive] = useState<ActiveReminder>(null);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const showCard = useCallback((fu: FollowUpRecord, threshold: number) => {
+  const { data } = useQuery({
+    queryKey: ["srv-followups", "reminders"],
+    queryFn: () => listFollowUpsFn({ data: { pageSize: 100, status: "SCHEDULED" } }),
+    enabled: !!user && (user.role === "agent" || user.role === "closer"),
+    refetchInterval: SCAN_MS,
+    staleTime: SCAN_MS,
+  });
+
+  const showCard = useCallback((fu: Fu, threshold: number) => {
     setActive({ fu, threshold });
     if (hideTimer.current) clearTimeout(hideTimer.current);
     hideTimer.current = setTimeout(() => setActive(null), 60_000);
   }, []);
 
   useEffect(() => {
-    if (!user) return;
-    seedDemoReminders(user);
-
-    const scan = () => {
-      const now = Date.now();
-      const all = loadFollowUps();
-      // Only SCHEDULED follow-ups. Completed / cancelled produce no reminders.
-      const mine = visibleFollowUps(all, user).filter((f) => f.status === "SCHEDULED");
-
-      for (const fu of mine) {
-        const m = minutesUntil(fu.scheduled_at, now);
-
-        // In-CRM reminder — pure derivation, persistent dedupe.
-        const t = liveReminderThreshold(fu, now);
-        if (t != null && claimOnce(reminderKey(fu, t))) {
-          const mins = Math.max(0, Math.ceil(m));
-          const title =
-            m <= 1 ? "Follow-up now" : `Follow-up in ${mins} minute${mins === 1 ? "" : "s"}`;
-          const c = resolveCustomer(fu);
-          toast(`⏰ ${title}`, {
-            description: `${c.name} · ${fu.follow_up_id} — ${displayTime(fu.scheduled_at)}`,
-            duration: m <= 1 ? 12_000 : 8_000,
-            action: {
-              label: "Open follow-up",
-              onClick: () =>
-                navigate({
-                  to: "/followups/$followUpId",
-                  params: { followUpId: fu.follow_up_id },
-                }),
-            },
-          });
-          if (t <= 3) showCard(fu, t);
-        }
-
-        // CLOSER follow-up → exactly ONE email to the closer, from the 15-minute
-        // mark. Triggered only from the closer's own session; never the agent's.
-        if (fu.owner_role === "closer" && user.role === "closer" && m <= 15 && m > -2) {
-          if (claimOnce(closerEmailKey(fu))) {
-            queueEmail(renderCloserEmail(fu));
-          }
-        }
+    if (!user || !data?.followUps) return;
+    const now = Date.now();
+    for (const dto of data.followUps) {
+      if (dto.status !== "SCHEDULED") continue;
+      const fu: Fu = {
+        follow_up_id: dto.follow_up_id,
+        scheduled_at: dto.scheduled_at,
+        status: dto.status,
+        customer_name: dto.customer_name,
+        phone: dto.phone,
+        comment: dto.comment,
+        lead_id: dto.lead_id ?? null,
+      };
+      const m = minutesUntil(fu.scheduled_at, now);
+      const t = liveReminderThreshold(fu as unknown as FollowUpRecord, now);
+      if (t != null && claimOnce(reminderKey(fu as unknown as FollowUpRecord, t))) {
+        const mins = Math.max(0, Math.ceil(m));
+        const title =
+          m <= 1 ? "Follow-up now" : `Follow-up in ${mins} minute${mins === 1 ? "" : "s"}`;
+        toast(`⏰ ${title}`, {
+          description: `${fu.customer_name} · ${fu.follow_up_id} — ${displayTime(fu.scheduled_at)}`,
+          duration: m <= 1 ? 12_000 : 8_000,
+          action: {
+            label: "Open follow-up",
+            onClick: () =>
+              navigate({ to: "/followups/$followUpId", params: { followUpId: fu.follow_up_id } }),
+          },
+        });
+        if (t <= 3) showCard(fu, t);
       }
-
-      // Shift-summary email — exactly ONE, 4 hours before the user's next shift.
-      if (user.role === "agent" || user.role === "closer") {
-        const startISO = nextShiftStart(user.process);
-        const sendAt = new Date(startISO).getTime() - SHIFT_EMAIL_LEAD_MINUTES * 60_000;
-        if (now >= sendAt && now <= sendAt + 12 * 60_000) {
-          if (claimOnce(shiftEmailKey(user.id, startISO))) {
-            queueEmail(renderShiftEmail(user, followUpsForNextShift(all, user)));
-          }
-        }
-      }
-    };
-
-    scan();
-    const id = setInterval(scan, SCAN_MS);
-    return () => clearInterval(id);
-  }, [user, navigate, showCard]);
+    }
+  }, [user, data, navigate, showCard]);
 
   useEffect(
     () => () => {
@@ -143,7 +107,6 @@ export function FollowUpReminders() {
   if (!active) return null;
   const { fu, threshold } = active;
   const imminent = threshold <= 1;
-  const cust = resolveCustomer(fu); // customer identity resolved from the Lead
 
   return (
     <div
@@ -167,9 +130,9 @@ export function FollowUpReminders() {
         </button>
       </div>
       <div className="p-4">
-        <p className="font-display text-base font-bold">{cust.name}</p>
+        <p className="font-display text-base font-bold">{fu.customer_name}</p>
         <p className="text-sm text-muted-foreground">
-          {fu.follow_up_id} · {cust.phone}
+          {fu.follow_up_id} · {fu.phone}
         </p>
         <p className="mt-1 text-sm">
           Scheduled <span className="font-semibold">{displayTime(fu.scheduled_at)}</span>

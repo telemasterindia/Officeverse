@@ -19,8 +19,10 @@ import {
 /* ----------------------------- salary_slips -------------------- */
 
 export async function insertSalarySlip(v: NewSalarySlip, ex: DBX = getDb()): Promise<number> {
-  const res = await ex.insert(salarySlips).values(v);
-  return Number((res as unknown as { insertId?: number | string }).insertId ?? 0);
+  // mysql2 `.values()` resolves to [ResultSetHeader, …] — `.insertId` off that
+  // array is undefined (→ 0). `.$returningId()` gives the real new PK.
+  const inserted = await ex.insert(salarySlips).values(v).$returningId();
+  return Number((inserted as Array<{ id?: number }>)[0]?.id ?? 0);
 }
 
 export async function updateSalarySlip(

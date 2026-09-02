@@ -16,45 +16,58 @@ import {
 } from "@/components/ui/select";
 import { PageHeader, SectionCard } from "@/components/officeverse/primitives";
 import { RoleGate } from "@/components/officeverse/role-gate";
-import { CLIENT_STATUSES, createClient, type ClientRecord } from "@/lib/officeverse/clients";
+import { useCreateServerClient, type ClientDTO } from "@/lib/officeverse/use-clients";
 import { shiftDateIST } from "@/lib/officeverse/shift";
 
 export const Route = createFileRoute("/_shell/clients/new")({
-  head: () => ({ meta: [{ title: "Create Client — TeleMaster India" }] }),
+  head: () => ({ meta: [{ title: "Create Client — TMI Officeverse CRM" }] }),
   component: () => (
-    <RoleGate allow={["admin"]}>
+    <RoleGate allow={["admin", "hr"]}>
       <CreateClientPage />
     </RoleGate>
   ),
 });
 
+const STATUS_OPTS = ["active", "prospect", "inactive", "closed"] as const;
+const STATUS_LABEL: Record<string, string> = {
+  active: "Active",
+  prospect: "Prospect",
+  inactive: "Inactive",
+  closed: "Closed",
+};
+
 function CreateClientPage() {
-  const [status, setStatus] = useState<ClientRecord["status"]>("Prospect");
-  const [created, setCreated] = useState<ClientRecord | null>(null);
+  const [status, setStatus] = useState<string>("prospect");
+  const [created, setCreated] = useState<ClientDTO | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
+  const createM = useCreateServerClient();
 
   const reset = () => {
     setCreated(null);
-    setStatus("Prospect");
+    setStatus("prospect");
     formRef.current?.reset();
   };
 
-  const submit = (e: FormEvent<HTMLFormElement>) => {
+  const submit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
     const s = (k: string) => String(fd.get(k) ?? "").trim();
-    if (!s("name") || !s("email")) return;
-    const rec = createClient({
-      name: s("name"),
-      contact_name: s("contact_name"),
-      email: s("email"),
-      phone: s("phone"),
-      address: s("address"),
-      status,
-      ...(s("registered_on") ? { registered_on: s("registered_on") } : {}),
-    });
-    toast.success("Client created", { description: `${rec.name} · ${rec.id}` });
-    setCreated(rec);
+    if (!s("name")) return;
+    try {
+      const { client } = await createM.mutateAsync({
+        name: s("name"),
+        status,
+        ...(s("contact_name") ? { contact_name: s("contact_name") } : {}),
+        ...(s("email") ? { email: s("email") } : {}),
+        ...(s("phone") ? { phone: s("phone") } : {}),
+        ...(s("address") ? { address: s("address") } : {}),
+        ...(s("registered_on") ? { registered_on: s("registered_on") } : {}),
+      });
+      toast.success("Client created", { description: `${client.name} · ${client.code}` });
+      setCreated(client);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not create the client");
+    }
   };
 
   return (
@@ -86,14 +99,14 @@ function CreateClientPage() {
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="status">Status</Label>
-              <Select value={status} onValueChange={(v) => setStatus(v as ClientRecord["status"])}>
+              <Select value={status} onValueChange={setStatus}>
                 <SelectTrigger id="status">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {CLIENT_STATUSES.map((s) => (
+                  {STATUS_OPTS.map((s) => (
                     <SelectItem key={s} value={s}>
-                      {s}
+                      {STATUS_LABEL[s]}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -112,14 +125,13 @@ function CreateClientPage() {
               <Input id="phone" name="phone" inputMode="tel" placeholder="Enter phone number" />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="email">Email *</Label>
+              <Label htmlFor="email">Email</Label>
               <Input
                 id="email"
                 name="email"
                 type="email"
                 autoComplete="off"
                 placeholder="Enter email address"
-                required
               />
             </div>
             <div className="space-y-1.5 sm:col-span-2">
@@ -130,7 +142,11 @@ function CreateClientPage() {
         </SectionCard>
 
         <div className="flex justify-end">
-          <Button type="submit" className="rounded-lg px-6 py-5 text-base font-semibold">
+          <Button
+            type="submit"
+            className="rounded-lg px-6 py-5 text-base font-semibold"
+            disabled={createM.isPending}
+          >
             <UserPlus className="mr-2 h-4 w-4" /> Create client
           </Button>
         </div>
@@ -147,7 +163,7 @@ function CreateClientPage() {
             </span>
             <h2 className="mt-4 font-display text-xl font-bold">Client created</h2>
             <p className="mt-2 text-sm text-muted-foreground">
-              {created?.name} · {created?.id}
+              {created?.name} · {created?.code}
             </p>
             <div className="mt-6 flex flex-col gap-2">
               <Button asChild className="rounded-lg">

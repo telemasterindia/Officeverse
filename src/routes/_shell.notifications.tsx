@@ -6,9 +6,6 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EmptyState, PageHeader } from "@/components/officeverse/primitives";
-import { queueEmail } from "@/lib/officeverse/alerts";
-import { renderShiftEmail } from "@/lib/officeverse/email-templates";
-import { followUpsForNextShift, loadFollowUps } from "@/lib/officeverse/followups";
 import { notificationHref } from "@/lib/officeverse/notification-link";
 import {
   useMarkAllNotificationsRead,
@@ -207,26 +204,11 @@ function NotificationsPage() {
 
         <TabsContent value="Emails" className="mt-6 space-y-3">
           <Card className="rounded-xl border-warning/40 bg-warning/10 p-4 text-xs shadow-sm">
-            <span className="font-semibold text-warning">Legacy preview.</span> This build has no
-            mail provider. The email outbox below is a client-side render of what the workflow would
-            send; the DB-backed email queue (Phase 5) is the real pipeline and is drained by a
-            future worker.
+            <span className="font-semibold text-warning">Legacy preview (non-authoritative).</span>{" "}
+            This build has no mail provider wired. The real pipeline is the DB-backed notification
+            system (used by the other tabs) plus the server email queue drained by the
+            <code> /internal/tick </code> cron (a future phase). Nothing below is sent.
           </Card>
-          {user && (user.role === "agent" || user.role === "closer") ? (
-            <Button
-              size="sm"
-              variant="outline"
-              className="rounded-lg"
-              onClick={() => {
-                const items = followUpsForNextShift(loadFollowUps(), user);
-                const mail = renderShiftEmail(user, items);
-                queueEmail(mail, { force: true });
-                toast("Shift summary rendered and queued (not sent)");
-              }}
-            >
-              <Mail className="mr-1.5 h-4 w-4" /> Preview my upcoming-shift summary
-            </Button>
-          ) : null}
 
           {outbox.length === 0 ? (
             <EmptyState

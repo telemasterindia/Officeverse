@@ -63,116 +63,118 @@
 }
 
 /*
- * TELEMASTER INDIA — Global Sales Floor.
- * A light, modern operational CRM: ~70% light working surfaces, ~20% navy brand
- * structure (sidebar / brand), ~10% India→USA atmosphere in hero/background.
- * Working surfaces are readable, high-contrast and glare-free. All colours oklch.
+ * OFFICEVERSE CRM — dark premium corporate design language.
+ * Deep navy / near-black surfaces, an electric-blue accent system, white
+ * primary text and muted blue-grey secondary text. Dark is the default
+ * identity; `:root` (light) is a clean, on-brand alternate for the toggle.
+ * All colours in oklch.
  */
 :root {
   --radius: 0.75rem;
 
-  --background: oklch(0.976 0.005 250); /* very light cool neutral */
-  --foreground: oklch(0.22 0.028 260); /* deep navy / charcoal text */
-  --card: oklch(1 0 0); /* white working surface */
-  --card-foreground: oklch(0.22 0.028 260);
+  --background: oklch(0.975 0.004 250); /* clean cool white */
+  --foreground: oklch(0.2 0.03 262); /* deep navy text */
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.2 0.03 262);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.22 0.028 260);
+  --popover-foreground: oklch(0.2 0.03 262);
 
-  --primary: oklch(0.7 0.17 55); /* TeleMaster saffron — primary CTA */
-  --primary-foreground: oklch(0.99 0.012 85);
-  --secondary: oklch(0.955 0.008 250); /* light neutral surface */
+  --primary: oklch(0.55 0.2 256); /* Officeverse electric blue — primary CTA */
+  --primary-foreground: oklch(0.99 0.004 250);
+  --secondary: oklch(0.955 0.008 252);
   --secondary-foreground: oklch(0.28 0.03 262);
-  --muted: oklch(0.955 0.006 250);
-  --muted-foreground: oklch(0.44 0.02 258); /* medium grey — comfortably readable */
-  --accent: oklch(0.55 0.16 256); /* royal blue — links / info accents */
-  --accent-foreground: oklch(0.99 0.012 250);
+  --muted: oklch(0.955 0.006 252);
+  --muted-foreground: oklch(0.46 0.03 258);
+  --accent: oklch(0.55 0.2 256); /* links / active states — same blue */
+  --accent-foreground: oklch(0.99 0.004 250);
 
-  --destructive: oklch(0.57 0.19 25); /* restrained US red */
+  --destructive: oklch(0.57 0.19 25);
   --destructive-foreground: oklch(0.99 0.01 20);
-  --success: oklch(0.57 0.13 155); /* India green */
+  --success: oklch(0.57 0.13 155);
   --success-foreground: oklch(0.99 0.01 155);
   --warning: oklch(0.72 0.15 68);
   --warning-foreground: oklch(0.3 0.06 68);
-  --info: oklch(0.55 0.14 250);
+  --info: oklch(0.55 0.19 255);
   --info-foreground: oklch(0.99 0.01 250);
 
-  --border: oklch(0.9 0.01 255); /* soft but clearly visible */
-  --input: oklch(0.84 0.014 255); /* input border — a touch darker */
-  --ring: oklch(0.6 0.15 256);
+  --border: oklch(0.9 0.012 255);
+  --input: oklch(0.84 0.016 255);
+  --ring: oklch(0.6 0.19 256);
 
-  /* chart palette tuned for a light background */
-  --chart-1: oklch(0.68 0.16 55);
-  --chart-2: oklch(0.55 0.15 256);
-  --chart-3: oklch(0.6 0.13 155);
-  --chart-4: oklch(0.55 0.16 300);
-  --chart-5: oklch(0.58 0.19 25);
+  --chart-1: oklch(0.58 0.2 256); /* electric blue — the lead metric */
+  --chart-2: oklch(0.68 0.15 235); /* cyan-blue support */
+  --chart-3: oklch(0.6 0.13 155); /* green — positive */
+  --chart-4: oklch(0.62 0.17 288); /* indigo support */
+  --chart-5: oklch(0.62 0.19 25); /* red — attention */
 
-  /* sidebar stays navy — the brand anchor */
-  --sidebar: oklch(0.2 0.035 264);
+  --sidebar: oklch(0.17 0.03 262);
   --sidebar-foreground: oklch(0.82 0.02 250);
-  --sidebar-primary: oklch(0.72 0.16 58);
-  --sidebar-primary-foreground: oklch(0.99 0.012 85);
-  --sidebar-accent: oklch(0.29 0.045 262);
+  --sidebar-primary: oklch(0.6 0.2 256);
+  --sidebar-primary-foreground: oklch(0.99 0.004 250);
+  --sidebar-accent: oklch(0.27 0.045 260);
   --sidebar-accent-foreground: oklch(0.98 0.01 250);
-  --sidebar-border: oklch(1 0 0 / 0.09);
-  --sidebar-ring: oklch(0.66 0.15 246);
+  --sidebar-border: oklch(1 0 0 / 0.08);
+  --sidebar-ring: oklch(0.62 0.19 256);
 
-  --gradient-hero: linear-gradient(135deg, oklch(0.78 0.16 62), oklch(0.66 0.19 40));
+  --gradient-hero: linear-gradient(135deg, oklch(0.62 0.2 256), oklch(0.7 0.16 232));
   --gradient-surface: linear-gradient(160deg, oklch(1 0 0), oklch(0.97 0.006 250));
   --shadow-float:
     0 1px 2px oklch(0.2 0.03 262 / 0.06), 0 10px 26px -12px oklch(0.2 0.03 262 / 0.14);
-  --shadow-glow: 0 0 0 3px oklch(0.6 0.15 256 / 0.16);
+  --shadow-glow: 0 0 0 3px oklch(0.6 0.19 256 / 0.18);
 
-  /* Solid working panels — no glass. */
   --panel-bg: oklch(1 0 0);
-  --panel-rim: oklch(0.9 0.01 255);
+  --panel-rim: oklch(0.9 0.012 255);
   --panel-shadow:
     0 1px 2px oklch(0.2 0.03 262 / 0.05), 0 12px 28px -14px oklch(0.2 0.03 262 / 0.12);
 }
 
-/* Dark mode — a proper dark CRM (toggle in the top bar). */
+/* Default identity — dark premium corporate (see reference). */
 .dark {
-  --background: oklch(0.19 0.025 264);
-  --foreground: oklch(0.95 0.01 250);
-  --card: oklch(0.24 0.03 264);
-  --card-foreground: oklch(0.95 0.01 250);
-  --popover: oklch(0.22 0.03 264);
-  --popover-foreground: oklch(0.95 0.01 250);
-  --primary: oklch(0.75 0.16 60);
-  --primary-foreground: oklch(0.2 0.04 60);
-  --secondary: oklch(0.28 0.03 264);
-  --secondary-foreground: oklch(0.92 0.015 250);
-  --muted: oklch(0.27 0.028 264);
-  --muted-foreground: oklch(0.7 0.02 255);
-  --accent: oklch(0.68 0.14 250);
-  --accent-foreground: oklch(0.14 0.03 250);
-  --destructive: oklch(0.63 0.19 25);
+  --background: oklch(0.16 0.028 262); /* near-black navy */
+  --foreground: oklch(0.97 0.006 250); /* white */
+  --card: oklch(0.212 0.032 262); /* deep-navy panel */
+  --card-foreground: oklch(0.97 0.006 250);
+  --popover: oklch(0.2 0.032 262);
+  --popover-foreground: oklch(0.97 0.006 250);
+  --primary: oklch(0.62 0.2 254); /* electric blue */
+  --primary-foreground: oklch(0.99 0.004 250);
+  --secondary: oklch(0.26 0.033 262); /* raised navy surface */
+  --secondary-foreground: oklch(0.93 0.012 250);
+  --muted: oklch(0.25 0.03 262);
+  --muted-foreground: oklch(0.7 0.025 255); /* muted blue-grey */
+  --accent: oklch(0.64 0.2 254); /* links / active states */
+  --accent-foreground: oklch(0.99 0.004 250);
+  --destructive: oklch(0.62 0.2 25);
   --destructive-foreground: oklch(0.98 0.01 20);
-  --success: oklch(0.68 0.13 155);
-  --success-foreground: oklch(0.14 0.03 155);
-  --warning: oklch(0.78 0.14 70);
-  --warning-foreground: oklch(0.22 0.04 70);
-  --info: oklch(0.68 0.13 250);
-  --info-foreground: oklch(0.14 0.03 250);
-  --border: oklch(0.95 0.02 250 / 0.12);
-  --input: oklch(0.95 0.02 250 / 0.16);
-  --ring: oklch(0.68 0.14 250);
-  --chart-1: oklch(0.76 0.15 60);
-  --chart-2: oklch(0.68 0.14 250);
-  --chart-3: oklch(0.7 0.13 155);
-  --chart-4: oklch(0.66 0.16 300);
-  --chart-5: oklch(0.66 0.19 25);
-  --sidebar: oklch(0.16 0.03 266);
-  --sidebar-foreground: oklch(0.8 0.02 250);
-  --sidebar-accent: oklch(0.27 0.042 262);
+  --success: oklch(0.68 0.14 158);
+  --success-foreground: oklch(0.13 0.03 155);
+  --warning: oklch(0.78 0.14 72);
+  --warning-foreground: oklch(0.2 0.04 70);
+  --info: oklch(0.66 0.19 254);
+  --info-foreground: oklch(0.13 0.03 250);
+  --border: oklch(0.72 0.03 255 / 0.16); /* subtle blue-grey hairline */
+  --input: oklch(0.72 0.03 255 / 0.22);
+  --ring: oklch(0.68 0.18 254);
+  --chart-1: oklch(0.66 0.2 254); /* electric blue */
+  --chart-2: oklch(0.74 0.14 230); /* cyan-blue */
+  --chart-3: oklch(0.72 0.14 158); /* green */
+  --chart-4: oklch(0.66 0.17 288); /* indigo */
+  --chart-5: oklch(0.66 0.2 25); /* red */
+  --sidebar: oklch(0.138 0.026 262); /* darker than the page — the brand rail */
+  --sidebar-foreground: oklch(0.82 0.02 250);
+  --sidebar-primary: oklch(0.64 0.2 254);
+  --sidebar-primary-foreground: oklch(0.99 0.004 250);
+  --sidebar-accent: oklch(0.26 0.04 260);
   --sidebar-accent-foreground: oklch(0.96 0.012 250);
-  --sidebar-border: oklch(0.95 0.02 250 / 0.09);
-  --panel-bg: oklch(0.24 0.03 264);
-  --panel-rim: oklch(0.95 0.02 250 / 0.1);
+  --sidebar-border: oklch(0.72 0.03 255 / 0.12);
+  --panel-bg: oklch(0.212 0.032 262);
+  --panel-rim: oklch(0.72 0.03 255 / 0.16);
   --panel-shadow:
-    0 2px 6px oklch(0 0 0 / 0.4), 0 20px 44px -18px oklch(0 0 0 / 0.5);
+    0 2px 8px oklch(0 0 0 / 0.45), 0 24px 50px -22px oklch(0 0 0 / 0.6);
   --shadow-float:
-    0 2px 6px oklch(0 0 0 / 0.4), 0 20px 44px -18px oklch(0 0 0 / 0.5);
+    0 2px 8px oklch(0 0 0 / 0.45), 0 24px 50px -22px oklch(0 0 0 / 0.6);
+  --shadow-glow: 0 0 0 3px oklch(0.66 0.18 254 / 0.28);
+  --gradient-hero: linear-gradient(135deg, oklch(0.6 0.2 256), oklch(0.72 0.16 224));
 }
 
 @layer base {
@@ -212,7 +214,7 @@
   color: transparent;
 }
 
-/* Login backdrop — a dark cinematic India → USA sky. */
+/* Login backdrop — deep navy with subtle electric-blue atmospheric lighting. */
 @utility aurora {
   position: relative;
   isolation: isolate;
@@ -222,11 +224,10 @@
     inset: -20%;
     z-index: -1;
     background:
-      radial-gradient(42% 44% at 6% 8%, oklch(0.55 0.14 64 / 0.3), transparent 70%),
-      radial-gradient(46% 52% at 96% 18%, oklch(0.4 0.14 262 / 0.5), transparent 72%),
-      radial-gradient(44% 44% at 20% 106%, oklch(0.44 0.11 156 / 0.24), transparent 72%),
-      radial-gradient(38% 40% at 90% 100%, oklch(0.48 0.16 24 / 0.2), transparent 72%),
-      linear-gradient(155deg, oklch(0.17 0.035 264), oklch(0.12 0.03 262));
+      radial-gradient(48% 50% at 88% 12%, oklch(0.55 0.2 256 / 0.4), transparent 70%),
+      radial-gradient(46% 52% at 4% 4%, oklch(0.42 0.16 258 / 0.34), transparent 72%),
+      radial-gradient(52% 46% at 60% 108%, oklch(0.5 0.18 250 / 0.22), transparent 74%),
+      linear-gradient(155deg, oklch(0.17 0.03 262), oklch(0.11 0.025 260));
     filter: blur(8px);
     pointer-events: none;
   }
@@ -258,26 +259,23 @@
   --ov-dur-2: 320ms;
   --ov-dur-scene: 900ms;
 
-  /* Room accent (used for faint section tints). The working area is light;
-     the India→USA cinematic identity lives only in the hero band + login. */
-  --room-accent: oklch(0.55 0.14 256);
+  /* Section accent (faint tints only) — the Officeverse electric blue. */
+  --room-accent: oklch(0.6 0.19 256);
   --room-wash:
-    radial-gradient(70% 60% at 0% 0%, oklch(0.75 0.09 66 / 0.1), transparent 70%),
-    radial-gradient(60% 62% at 100% 0%, oklch(0.7 0.08 256 / 0.1), transparent 72%);
+    radial-gradient(70% 60% at 0% 0%, oklch(0.6 0.16 256 / 0.08), transparent 70%),
+    radial-gradient(60% 62% at 100% 0%, oklch(0.68 0.14 232 / 0.08), transparent 72%);
 
-  /* App background behind the working area — nearly flat, cool light. */
+  /* App background behind the working area — nearly flat cool light. */
   --room-bg: linear-gradient(180deg, oklch(0.985 0.005 250), oklch(0.965 0.008 252));
 
-  /* Hero band — a soft India → USA wash on light: warm saffron/cream on the
-     India side, cool blue on the USA side, a low India-green note. Readable. */
+  /* Hero band — a restrained electric-blue wash on light. */
   --hero-bg:
-    radial-gradient(58% 90% at 0% 0%, oklch(0.92 0.07 68 / 0.75), transparent 62%),
-    radial-gradient(58% 90% at 100% 8%, oklch(0.9 0.06 250 / 0.75), transparent 64%),
-    radial-gradient(46% 60% at 82% 100%, oklch(0.9 0.06 150 / 0.5), transparent 68%),
+    radial-gradient(60% 92% at 0% 0%, oklch(0.9 0.07 252 / 0.7), transparent 62%),
+    radial-gradient(58% 90% at 100% 6%, oklch(0.9 0.06 232 / 0.6), transparent 64%),
     linear-gradient(180deg, oklch(0.985 0.006 250), oklch(0.955 0.01 250));
 
-  --shift-tint: oklch(0.6 0.12 256 / 0.12);
-  --shift-sky: linear-gradient(180deg, oklch(0.7 0.08 250), oklch(0.9 0.03 235));
+  --shift-tint: oklch(0.6 0.16 256 / 0.12);
+  --shift-sky: linear-gradient(180deg, oklch(0.7 0.1 250), oklch(0.9 0.04 235));
 }
 
 [data-room="workspace"] {
@@ -296,14 +294,13 @@
   --room-accent: oklch(0.55 0.14 256);
 }
 
-/* Dark mode — bring back a deep navy environment + cinematic hero. */
+/* Dark (default) — deep navy environment + electric-blue lit hero. */
 .dark {
-  --room-bg: linear-gradient(180deg, oklch(0.18 0.025 264), oklch(0.16 0.025 262));
+  --room-bg: linear-gradient(180deg, oklch(0.165 0.028 262), oklch(0.135 0.024 260));
   --hero-bg:
-    radial-gradient(52% 90% at 0% 0%, oklch(0.5 0.14 64 / 0.28), transparent 60%),
-    radial-gradient(70% 90% at 104% 20%, oklch(0.42 0.14 260 / 0.4), transparent 66%),
-    radial-gradient(46% 60% at 82% 100%, oklch(0.4 0.12 152 / 0.24), transparent 68%),
-    linear-gradient(180deg, oklch(0.22 0.03 264), oklch(0.16 0.025 262));
+    radial-gradient(58% 92% at 100% 4%, oklch(0.5 0.18 256 / 0.34), transparent 64%),
+    radial-gradient(52% 90% at 0% 0%, oklch(0.42 0.15 258 / 0.26), transparent 62%),
+    linear-gradient(180deg, oklch(0.2 0.03 262), oklch(0.15 0.026 260));
 }
 
 [data-shift="US"] {
@@ -442,561 +439,6 @@
   transition: stroke-dashoffset var(--ov-dur-scene) var(--ov-ease);
 }
 
-/* Illustrated room scene — very gentle drift so the office feels alive. */
-@keyframes ov-scene-float {
-  0%,
-  100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-3px);
-  }
-}
-.ov-room-scene-float {
-  animation: ov-scene-float 9s ease-in-out infinite;
-  transform-box: fill-box;
-  transform-origin: 50% 100%;
-}
-
-/* tiny ambient life for scene objects */
-@keyframes ov-scene-glow {
-  0%,
-  100% {
-    opacity: 0.4;
-  }
-  50% {
-    opacity: 0.68;
-  }
-}
-@keyframes ov-scene-sway {
-  0%,
-  100% {
-    transform: rotate(-1.6deg);
-  }
-  50% {
-    transform: rotate(1.6deg);
-  }
-}
-@keyframes ov-scene-steam {
-  0% {
-    opacity: 0;
-    transform: translateY(2px);
-  }
-  40% {
-    opacity: 0.7;
-  }
-  100% {
-    opacity: 0;
-    transform: translateY(-10px);
-  }
-}
-.ov-scene-glow {
-  animation: ov-scene-glow 4.5s ease-in-out infinite;
-}
-.ov-scene-sway {
-  transform-box: fill-box;
-  transform-origin: 50% 100%;
-  animation: ov-scene-sway 7s ease-in-out infinite;
-}
-.ov-scene-steam {
-  transform-box: fill-box;
-  transform-origin: 50% 100%;
-  animation: ov-scene-steam 3.6s ease-in-out infinite;
-}
-
-/* The illustrated back wall behind the hero avatar — soft and unobtrusive. */
-.ov-room-scene {
-  filter: saturate(0.92) brightness(1);
-  opacity: 0.85;
-}
-.dark .ov-room-scene {
-  filter: saturate(0.8) brightness(0.7);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .animate-rise-in,
-  .animate-door-in,
-  .animate-drift,
-  .animate-attention,
-  .ov-room-scene-float,
-  .ov-scene-glow,
-  .ov-scene-sway,
-  .ov-scene-steam {
-    animation: none !important;
-  }
-  .ov-scene-steam {
-    opacity: 0;
-  }
-  .ov-ring-progress {
-    transition: none !important;
-  }
-}
-
-/* ============================================================
- * OFFICEVERSE — game-character animation & poses (Phase 2A redesign)
- * Full-body rig. CSS/SVG only, no JS loop. viewBox is 300 x 440;
- * transform-box:view-box lets transform-origin use those user units.
- * ============================================================ */
-
-.ov-char {
-  display: block;
-  overflow: visible;
-}
-.ov-c-body,
-.ov-c-head,
-.ov-c-eyes,
-.ov-c-legs,
-.ov-c-arm-l,
-.ov-c-arm-r {
-  transform-box: view-box;
-}
-.ov-c-body {
-  transform-origin: 150px 300px;
-}
-.ov-c-head {
-  transform-origin: 150px 168px;
-}
-.ov-c-eyes {
-  transform-origin: 150px 98px;
-}
-.ov-c-legs {
-  transform-origin: 150px 420px;
-}
-.ov-c-arm-l {
-  transform-origin: 110px 182px;
-}
-.ov-c-arm-r {
-  transform-origin: 190px 182px;
-}
-
-@keyframes ov-body-breathe {
-  0%,
-  100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-2.5px);
-  }
-}
-@keyframes ov-head-sway {
-  0%,
-  100% {
-    transform: rotate(-1.6deg);
-  }
-  50% {
-    transform: rotate(1.6deg);
-  }
-}
-@keyframes ov-eye-blink {
-  0%,
-  91%,
-  100% {
-    transform: scaleY(1);
-  }
-  95% {
-    transform: scaleY(0.06);
-  }
-}
-@keyframes ov-arm-sway-l {
-  0%,
-  100% {
-    transform: rotate(1.6deg);
-  }
-  50% {
-    transform: rotate(-1.6deg);
-  }
-}
-@keyframes ov-arm-sway-r {
-  0%,
-  100% {
-    transform: rotate(-1.6deg);
-  }
-  50% {
-    transform: rotate(1.6deg);
-  }
-}
-@keyframes ov-celebrate {
-  0%,
-  100% {
-    transform: translateY(-13px);
-  }
-  50% {
-    transform: translateY(-22px);
-  }
-}
-@keyframes ov-wave {
-  0%,
-  100% {
-    transform: rotate(-142deg);
-  }
-  50% {
-    transform: rotate(-166deg);
-  }
-}
-
-.ov-char--animated .ov-c-body {
-  animation: ov-body-breathe 4.6s var(--ov-ease) infinite;
-}
-.ov-char--animated .ov-c-head {
-  animation: ov-head-sway 6.5s ease-in-out infinite;
-}
-.ov-char--animated .ov-c-eyes {
-  animation: ov-eye-blink 6s ease-in-out infinite;
-}
-.ov-char--animated .ov-c-arm-l {
-  animation: ov-arm-sway-l 5.4s ease-in-out infinite;
-}
-.ov-char--animated .ov-c-arm-r {
-  animation: ov-arm-sway-r 5.4s ease-in-out infinite;
-}
-
-/* ---- deliberate held poses (override idle animation) ---- */
-.ov-char[data-pose="working"] .ov-c-body {
-  animation: none;
-  transform: rotate(4deg);
-}
-.ov-char[data-pose="working"] .ov-c-arm-l {
-  animation: none;
-  transform: rotate(-46deg);
-}
-.ov-char[data-pose="working"] .ov-c-arm-r {
-  animation: none;
-  transform: rotate(46deg);
-}
-.ov-char[data-pose="working"] .ov-c-head {
-  animation: none;
-  transform: rotate(7deg);
-}
-
-.ov-char[data-pose="focused"] .ov-c-body {
-  animation: none;
-  transform: rotate(5deg);
-}
-.ov-char[data-pose="focused"] .ov-c-arm-l {
-  animation: none;
-  transform: rotate(-28deg);
-}
-.ov-char[data-pose="focused"] .ov-c-arm-r {
-  animation: none;
-  transform: rotate(28deg);
-}
-.ov-char[data-pose="focused"] .ov-c-head {
-  animation: none;
-  transform: rotate(4deg);
-}
-
-.ov-char[data-pose="happy"] .ov-c-body {
-  animation: none;
-  transform: translateY(-5px);
-}
-.ov-char[data-pose="happy"] .ov-c-arm-l {
-  animation: none;
-  transform: rotate(-22deg);
-}
-.ov-char[data-pose="happy"] .ov-c-arm-r {
-  animation: none;
-  transform: rotate(136deg);
-}
-.ov-char[data-pose="happy"] .ov-c-head {
-  animation: none;
-  transform: rotate(-4deg);
-}
-
-.ov-char[data-pose="thinking"] .ov-c-head {
-  animation: none;
-  transform: rotate(10deg);
-}
-.ov-char[data-pose="thinking"] .ov-c-arm-r {
-  animation: none;
-  transform: rotate(128deg) translateX(6px);
-}
-.ov-char[data-pose="thinking"] .ov-c-arm-l {
-  animation: none;
-  transform: rotate(8deg);
-}
-.ov-char[data-pose="thinking"] .ov-c-body {
-  animation: none;
-  transform: rotate(-3deg);
-}
-
-.ov-char[data-pose="concerned"] .ov-c-body {
-  animation: none;
-  transform: translateY(2px) scaleY(0.96);
-}
-.ov-char[data-pose="concerned"] .ov-c-head {
-  animation: none;
-  transform: rotate(-6deg);
-}
-.ov-char[data-pose="concerned"] .ov-c-arm-l {
-  animation: none;
-  transform: rotate(14deg);
-}
-.ov-char[data-pose="concerned"] .ov-c-arm-r {
-  animation: none;
-  transform: rotate(-14deg);
-}
-
-.ov-char[data-pose="tired"] .ov-c-body {
-  animation: none;
-  transform: translateY(6px) rotate(-3deg);
-}
-.ov-char[data-pose="tired"] .ov-c-head {
-  animation: none;
-  transform: rotate(15deg) translateY(3px);
-}
-.ov-char[data-pose="tired"] .ov-c-arm-l {
-  animation: none;
-  transform: rotate(11deg);
-}
-.ov-char[data-pose="tired"] .ov-c-arm-r {
-  animation: none;
-  transform: rotate(-11deg);
-}
-
-.ov-char[data-pose="celebrating"] .ov-c-body {
-  animation: ov-celebrate 0.62s ease-in-out infinite;
-}
-.ov-char[data-pose="celebrating"] .ov-c-arm-l {
-  animation: none;
-  transform: rotate(-158deg);
-}
-.ov-char[data-pose="celebrating"] .ov-c-arm-r {
-  animation: none;
-  transform: rotate(158deg);
-}
-.ov-char[data-pose="celebrating"] .ov-c-legs {
-  transform-origin: 150px 424px;
-  transform: scaleY(0.93);
-}
-.ov-char[data-pose="celebrating"] .ov-c-head {
-  animation: none;
-  transform: rotate(0) translateY(-2px);
-}
-
-.ov-char[data-pose="attention"] .ov-c-head {
-  animation: none;
-  transform: translateY(-1px);
-}
-.ov-char[data-pose="attention"] .ov-c-body {
-  animation: none;
-  transform: translateY(-2px);
-}
-.ov-char[data-pose="attention"] .ov-c-arm-l {
-  animation: none;
-  transform: rotate(-6deg);
-}
-.ov-char[data-pose="attention"] .ov-c-arm-r {
-  animation: none;
-  transform: rotate(6deg);
-}
-
-.ov-char[data-pose="wave"] .ov-c-arm-r {
-  animation: ov-wave 0.7s ease-in-out infinite;
-}
-.ov-char[data-pose="wave"] .ov-c-arm-l {
-  animation: none;
-  transform: rotate(-14deg);
-}
-.ov-char[data-pose="wave"] .ov-c-head {
-  animation: none;
-  transform: rotate(-4deg);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .ov-char--animated .ov-c-body,
-  .ov-char--animated .ov-c-head,
-  .ov-char--animated .ov-c-eyes,
-  .ov-char--animated .ov-c-arm-l,
-  .ov-char--animated .ov-c-arm-r,
-  .ov-char[data-pose="celebrating"] .ov-c-body,
-  .ov-char[data-pose="wave"] .ov-c-arm-r {
-    animation: none !important;
-  }
-  .ov-char[data-pose="wave"] .ov-c-arm-r {
-    transform: rotate(-150deg);
-  }
-}
-
-/* ============================================================
- * TeleMaster India — 2.5D avatar (Avatar25D). viewBox 360 x 430.
- * Parallax tilt on the wrapper + a continuous idle over held poses.
- * ============================================================ */
-.ov25-wrap {
-  perspective: 1000px;
-}
-.ov25-tilt {
-  transform-style: preserve-3d;
-  transition: transform 0.4s cubic-bezier(0.22, 1, 0.36, 1);
-  will-change: transform;
-}
-.ov25 {
-  display: block;
-  overflow: visible;
-  filter: drop-shadow(0 24px 30px rgba(24, 18, 36, 0.28));
-}
-.ov25-body,
-.ov25-head,
-.ov25-eyes,
-.ov25-arm-l,
-.ov25-arm-r,
-.ov25-fore-l,
-.ov25-fore-r,
-.ov25-hand-r {
-  transform-box: view-box;
-}
-.ov25-body {
-  transform-origin: 180px 430px;
-}
-.ov25-head {
-  transform-origin: 180px 150px;
-}
-.ov25-eyes {
-  transform-origin: 180px 86px;
-}
-.ov25-arm-l {
-  transform-origin: 100px 202px;
-}
-.ov25-arm-r {
-  transform-origin: 260px 202px;
-}
-.ov25-fore-l {
-  transform-origin: 80px 300px;
-}
-.ov25-fore-r {
-  transform-origin: 280px 300px;
-}
-.ov25-hand-r {
-  transform-origin: 236px 392px;
-}
-
-@keyframes ov25-breathe {
-  0%,
-  100% {
-    transform: translateY(0) scaleY(1);
-  }
-  50% {
-    transform: translateY(-3px) scaleY(1.008);
-  }
-}
-@keyframes ov25-sway {
-  0%,
-  100% {
-    transform: rotate(-1.1deg) translateY(0);
-  }
-  50% {
-    transform: rotate(1.1deg) translateY(-1.5px);
-  }
-}
-@keyframes ov25-blink {
-  0%,
-  92%,
-  100% {
-    transform: scaleY(1);
-  }
-  95.5% {
-    transform: scaleY(0.06);
-  }
-}
-@keyframes ov25-type {
-  0%,
-  100% {
-    transform: rotate(0) translateY(0);
-  }
-  50% {
-    transform: rotate(-3deg) translateY(-2px);
-  }
-}
-@keyframes ov25-wave {
-  0%,
-  100% {
-    transform: rotate(-46deg) translateY(-6px);
-  }
-  50% {
-    transform: rotate(-62deg) translateY(-6px);
-  }
-}
-
-.ov25 .ov25-body {
-  animation: ov25-breathe 4.8s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-}
-.ov25 .ov25-head {
-  animation: ov25-sway 7.5s ease-in-out infinite;
-}
-.ov25 .ov25-eyes {
-  animation: ov25-blink 6.4s ease-in-out infinite;
-}
-.ov25 .ov25-fore-l,
-.ov25 .ov25-fore-r {
-  animation: ov25-type 3.6s ease-in-out infinite;
-}
-
-.ov25[data-pose="working"] .ov25-head {
-  animation: none;
-  transform: rotate(6deg);
-}
-.ov25[data-pose="working"] .ov25-fore-l,
-.ov25[data-pose="working"] .ov25-fore-r {
-  animation: ov25-type 0.52s ease-in-out infinite;
-}
-.ov25[data-pose="wave"] .ov25-arm-r {
-  animation: ov25-wave 0.95s ease-in-out infinite;
-}
-.ov25[data-pose="wave"] .ov25-fore-r {
-  animation: none;
-  transform: rotate(24deg);
-}
-.ov25[data-pose="wave"] .ov25-head {
-  animation: none;
-  transform: rotate(-3deg);
-}
-.ov25[data-pose="thinking"] .ov25-arm-r {
-  animation: none;
-  transform: rotate(34deg);
-}
-.ov25[data-pose="thinking"] .ov25-fore-r {
-  animation: none;
-  transform: rotate(-64deg) translateX(6px);
-}
-.ov25[data-pose="thinking"] .ov25-head {
-  animation: none;
-  transform: rotate(-8deg);
-}
-.ov25[data-pose="happy"] .ov25-body {
-  animation: ov25-breathe 1.7s ease-in-out infinite;
-}
-.ov25[data-pose="celebrating"] .ov25-body {
-  animation: ov25-breathe 1.2s ease-in-out infinite;
-}
-.ov25[data-pose="celebrating"] .ov25-arm-l {
-  animation: none;
-  transform: rotate(-44deg);
-}
-.ov25[data-pose="celebrating"] .ov25-arm-r {
-  animation: none;
-  transform: rotate(44deg);
-}
-.ov25[data-pose="concerned"] .ov25-head,
-.ov25[data-pose="tired"] .ov25-head {
-  animation: none;
-  transform: rotate(4deg) translateY(2px);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .ov25-tilt {
-    transition: none;
-  }
-  .ov25 .ov25-body,
-  .ov25 .ov25-head,
-  .ov25 .ov25-eyes,
-  .ov25 .ov25-fore-l,
-  .ov25 .ov25-fore-r,
-  .ov25 .ov25-arm-l,
-  .ov25 .ov25-arm-r {
-    animation: none !important;
-    transform: none !important;
-  }
-}
-
 /* ================================================================= *
  *  Phase 19 — Photo Effects Engine                                   *
  *  Lightweight CSS-only frame / ring / glow animations rendered      *
@@ -1011,18 +453,62 @@
 }
 .ov-photo-fx > .ov-photo-fx-glow {
   position: absolute;
-  inset: -14%;
+  inset: -16%;
   border-radius: 9999px;
   z-index: 0;
   pointer-events: none;
-  filter: blur(10px);
-  opacity: 0.9;
+  filter: blur(12px);
+  opacity: 1;
 }
 .ov-photo-fx > .ov-photo-fx-img,
 .ov-photo-fx > .ov-photo-fx-ring {
   position: relative;
   z-index: 1;
   border-radius: 9999px;
+}
+
+/* UAT #13 — a bright, effect-tinted ring that sits ON TOP of the photo so the
+ * recognition effect is unmistakably visible. Colour is picked per effect via
+ * the --fx-color var below. */
+.ov-photo-fx {
+  --fx-color: var(--primary);
+}
+.ov-photo-fx[data-effect="ENERGETIC"],
+.ov-photo-fx[data-effect="CELEBRATION"],
+.ov-photo-fx[data-effect="FESTIVAL"] {
+  --fx-color: var(--accent);
+}
+.ov-photo-fx[data-effect="SPORTY"] {
+  --fx-color: var(--success);
+}
+.ov-photo-fx[data-effect="CHAMPION"],
+.ov-photo-fx[data-effect="VICTORY"] {
+  --fx-color: var(--warning);
+}
+.ov-photo-fx[data-effect="FIRE"] {
+  --fx-color: #ff6a00;
+}
+.ov-photo-fx[data-effect="MONEY"] {
+  --fx-color: #1a9c5b;
+}
+.ov-photo-fx::after {
+  content: "";
+  position: absolute;
+  inset: -5px;
+  border-radius: 9999px;
+  z-index: 2;
+  pointer-events: none;
+  border: 3px solid color-mix(in oklab, var(--fx-color) 88%, transparent);
+  box-shadow:
+    0 0 20px color-mix(in oklab, var(--fx-color) 60%, transparent),
+    inset 0 0 12px color-mix(in oklab, var(--fx-color) 28%, transparent);
+}
+.ov-photo-fx-live::after {
+  animation: ov-fx-ring-breathe 1.8s ease-in-out infinite;
+}
+@keyframes ov-fx-ring-breathe {
+  0%, 100% { transform: scale(1); opacity: 0.9; }
+  50% { transform: scale(1.05); opacity: 1; }
 }
 .ov-photo-fx-badge {
   position: absolute;
@@ -1098,6 +584,7 @@
   .ov-fx-ring-pulse,
   .ov-fx-flame { animation: none !important; }
   .ov-fx-ring-spin::before { animation: none !important; }
+  .ov-photo-fx-live::after { animation: none !important; }
   .ov-photo-fx-canvas { display: none !important; }
   .ov-celebration-overlay { animation: none !important; }
 }

@@ -3,6 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { Flame, Trophy } from "lucide-react";
 import { EmptyState, PageHeader, SectionCard } from "@/components/officeverse/primitives";
 import { PhotoDisplay } from "@/components/officeverse/photo/PhotoDisplay";
+import { StaffAvatar } from "@/components/officeverse/staff-avatar";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -115,9 +116,11 @@ function LeaderboardPage() {
                     </td>
                     <td className="px-3 py-2">
                       <div className="flex items-center gap-2.5">
-                        <PhotoDisplay
+                        <StaffAvatar
+                          userId={r.userId}
                           name={r.name}
-                          size="xs"
+                          hasPhoto={r.photoAvailable}
+                          size="small"
                           {...(r.rank <= 3 ? { rank: r.rank } : {})}
                           {...(r.topBadge ? { badge: r.topBadge } : {})}
                         />

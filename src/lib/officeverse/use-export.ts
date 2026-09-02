@@ -3,7 +3,7 @@
  * The download mutation decodes the base64 payload into a Blob and saves it.
  */
 import { useMutation } from "@tanstack/react-query";
-import { exportDownloadFn, exportPreviewFn } from "./export-fns";
+import { exportDownloadFn, exportMyLeadsFn, exportPreviewFn } from "./export-fns";
 import type { ExportDatasetKey, ExportFormat } from "@/lib/officeverse/export/datasets";
 
 export interface ExportFilters {
@@ -59,6 +59,26 @@ export function useExportDownload() {
   >({
     mutationFn: async (v) => {
       const res = await exportDownloadFn({ data: v });
+      saveBase64(res.fileName, res.mime, res.base64);
+      return { fileName: res.fileName, rowCount: res.rowCount };
+    },
+  });
+}
+
+/**
+ * Admin UAT §12 — download the caller's own leads / follow-ups (Excel by
+ * default). Admin + HR (all), Closer (own). Agents are rejected server-side.
+ */
+export function useExportMyLeads() {
+  return useMutation<
+    { fileName: string; rowCount: number },
+    Error,
+    { format?: ExportFormat; dataset?: "leads" | "followups" }
+  >({
+    mutationFn: async (v) => {
+      const res = await exportMyLeadsFn({
+        data: { dataset: v.dataset ?? "leads", format: v.format ?? "xlsx" },
+      });
       saveBase64(res.fileName, res.mime, res.base64);
       return { fileName: res.fileName, rowCount: res.rowCount };
     },

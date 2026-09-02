@@ -15,24 +15,30 @@ import { Route as OfficeTvRouteImport } from './routes/office-tv'
 import { Route as ShellAssignmentsRouteImport } from './routes/_shell.assignments'
 import { Route as ShellAttendanceRouteImport } from './routes/_shell.attendance'
 import { Route as ShellAuditRouteImport } from './routes/_shell.audit'
-import { Route as ShellAvatarStudioRouteImport } from './routes/_shell.avatar-studio'
 import { Route as ShellCloserHubRouteImport } from './routes/_shell.closer-hub'
+import { Route as ShellCompanyRouteImport } from './routes/_shell.company'
 import { Route as ShellEmployeesRouteImport } from './routes/_shell.employees'
 import { Route as ShellExportsRouteImport } from './routes/_shell.exports'
 import { Route as ShellHolidaysRouteImport } from './routes/_shell.holidays'
 import { Route as ShellImportsRouteImport } from './routes/_shell.imports'
+import { Route as ShellIncentivesRouteImport } from './routes/_shell.incentives'
 import { Route as ShellLeaderboardRouteImport } from './routes/_shell.leaderboard'
 import { Route as ShellLeaveRouteImport } from './routes/_shell.leave'
 import { Route as ShellLiveRouteImport } from './routes/_shell.live'
 import { Route as ShellMissionControlRouteImport } from './routes/_shell.mission-control'
 import { Route as ShellNotificationsRouteImport } from './routes/_shell.notifications'
 import { Route as ShellOfficeNetworksRouteImport } from './routes/_shell.office-networks'
+import { Route as ShellOperationsRouteImport } from './routes/_shell.operations'
 import { Route as ShellPayrollRouteImport } from './routes/_shell.payroll'
 import { Route as ShellPeopleRouteImport } from './routes/_shell.people'
+import { Route as ShellPerformanceRouteImport } from './routes/_shell.performance'
+import { Route as ShellPoliciesRouteImport } from './routes/_shell.policies'
 import { Route as ShellPresenceRouteImport } from './routes/_shell.presence'
 import { Route as ShellProfileRouteImport } from './routes/_shell.profile'
 import { Route as ShellReportsRouteImport } from './routes/_shell.reports'
+import { Route as ShellScoringRouteImport } from './routes/_shell.scoring'
 import { Route as ShellSettingsRouteImport } from './routes/_shell.settings'
+import { Route as ShellShiftsRouteImport } from './routes/_shell.shifts'
 import { Route as ShellTeamRouteImport } from './routes/_shell.team'
 import { Route as ShellWorkspaceRouteImport } from './routes/_shell.workspace'
 import { Route as ShellAgentsIndexRouteImport } from './routes/_shell.agents.index'
@@ -76,14 +82,14 @@ const ShellAuditRoute = ShellAuditRouteImport.update({
   path: '/audit',
   getParentRoute: () => ShellRoute,
 } as any)
-const ShellAvatarStudioRoute = ShellAvatarStudioRouteImport.update({
-  id: '/avatar-studio',
-  path: '/avatar-studio',
-  getParentRoute: () => ShellRoute,
-} as any)
 const ShellCloserHubRoute = ShellCloserHubRouteImport.update({
   id: '/closer-hub',
   path: '/closer-hub',
+  getParentRoute: () => ShellRoute,
+} as any)
+const ShellCompanyRoute = ShellCompanyRouteImport.update({
+  id: '/company',
+  path: '/company',
   getParentRoute: () => ShellRoute,
 } as any)
 const ShellEmployeesRoute = ShellEmployeesRouteImport.update({
@@ -104,6 +110,11 @@ const ShellHolidaysRoute = ShellHolidaysRouteImport.update({
 const ShellImportsRoute = ShellImportsRouteImport.update({
   id: '/imports',
   path: '/imports',
+  getParentRoute: () => ShellRoute,
+} as any)
+const ShellIncentivesRoute = ShellIncentivesRouteImport.update({
+  id: '/incentives',
+  path: '/incentives',
   getParentRoute: () => ShellRoute,
 } as any)
 const ShellLeaderboardRoute = ShellLeaderboardRouteImport.update({
@@ -136,6 +147,11 @@ const ShellOfficeNetworksRoute = ShellOfficeNetworksRouteImport.update({
   path: '/office-networks',
   getParentRoute: () => ShellRoute,
 } as any)
+const ShellOperationsRoute = ShellOperationsRouteImport.update({
+  id: '/operations',
+  path: '/operations',
+  getParentRoute: () => ShellRoute,
+} as any)
 const ShellPayrollRoute = ShellPayrollRouteImport.update({
   id: '/payroll',
   path: '/payroll',
@@ -144,6 +160,16 @@ const ShellPayrollRoute = ShellPayrollRouteImport.update({
 const ShellPeopleRoute = ShellPeopleRouteImport.update({
   id: '/people',
   path: '/people',
+  getParentRoute: () => ShellRoute,
+} as any)
+const ShellPerformanceRoute = ShellPerformanceRouteImport.update({
+  id: '/performance',
+  path: '/performance',
+  getParentRoute: () => ShellRoute,
+} as any)
+const ShellPoliciesRoute = ShellPoliciesRouteImport.update({
+  id: '/policies',
+  path: '/policies',
   getParentRoute: () => ShellRoute,
 } as any)
 const ShellPresenceRoute = ShellPresenceRouteImport.update({
@@ -161,9 +187,19 @@ const ShellReportsRoute = ShellReportsRouteImport.update({
   path: '/reports',
   getParentRoute: () => ShellRoute,
 } as any)
+const ShellScoringRoute = ShellScoringRouteImport.update({
+  id: '/scoring',
+  path: '/scoring',
+  getParentRoute: () => ShellRoute,
+} as any)
 const ShellSettingsRoute = ShellSettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
+  getParentRoute: () => ShellRoute,
+} as any)
+const ShellShiftsRoute = ShellShiftsRouteImport.update({
+  id: '/shifts',
+  path: '/shifts',
   getParentRoute: () => ShellRoute,
 } as any)
 const ShellTeamRoute = ShellTeamRouteImport.update({
@@ -239,24 +275,30 @@ export interface FileRoutesByFullPath {
   '/assignments': typeof ShellAssignmentsRoute
   '/attendance': typeof ShellAttendanceRoute
   '/audit': typeof ShellAuditRoute
-  '/avatar-studio': typeof ShellAvatarStudioRoute
   '/closer-hub': typeof ShellCloserHubRoute
+  '/company': typeof ShellCompanyRoute
   '/employees': typeof ShellEmployeesRoute
   '/exports': typeof ShellExportsRoute
   '/holidays': typeof ShellHolidaysRoute
   '/imports': typeof ShellImportsRoute
+  '/incentives': typeof ShellIncentivesRoute
   '/leaderboard': typeof ShellLeaderboardRoute
   '/leave': typeof ShellLeaveRoute
   '/live': typeof ShellLiveRoute
   '/mission-control': typeof ShellMissionControlRoute
   '/notifications': typeof ShellNotificationsRoute
   '/office-networks': typeof ShellOfficeNetworksRoute
+  '/operations': typeof ShellOperationsRoute
   '/payroll': typeof ShellPayrollRoute
   '/people': typeof ShellPeopleRoute
+  '/performance': typeof ShellPerformanceRoute
+  '/policies': typeof ShellPoliciesRoute
   '/presence': typeof ShellPresenceRoute
   '/profile': typeof ShellProfileRoute
   '/reports': typeof ShellReportsRoute
+  '/scoring': typeof ShellScoringRoute
   '/settings': typeof ShellSettingsRoute
+  '/shifts': typeof ShellShiftsRoute
   '/team': typeof ShellTeamRoute
   '/workspace': typeof ShellWorkspaceRoute
   '/agents/new': typeof ShellAgentsNewRoute
@@ -277,24 +319,30 @@ export interface FileRoutesByTo {
   '/assignments': typeof ShellAssignmentsRoute
   '/attendance': typeof ShellAttendanceRoute
   '/audit': typeof ShellAuditRoute
-  '/avatar-studio': typeof ShellAvatarStudioRoute
   '/closer-hub': typeof ShellCloserHubRoute
+  '/company': typeof ShellCompanyRoute
   '/employees': typeof ShellEmployeesRoute
   '/exports': typeof ShellExportsRoute
   '/holidays': typeof ShellHolidaysRoute
   '/imports': typeof ShellImportsRoute
+  '/incentives': typeof ShellIncentivesRoute
   '/leaderboard': typeof ShellLeaderboardRoute
   '/leave': typeof ShellLeaveRoute
   '/live': typeof ShellLiveRoute
   '/mission-control': typeof ShellMissionControlRoute
   '/notifications': typeof ShellNotificationsRoute
   '/office-networks': typeof ShellOfficeNetworksRoute
+  '/operations': typeof ShellOperationsRoute
   '/payroll': typeof ShellPayrollRoute
   '/people': typeof ShellPeopleRoute
+  '/performance': typeof ShellPerformanceRoute
+  '/policies': typeof ShellPoliciesRoute
   '/presence': typeof ShellPresenceRoute
   '/profile': typeof ShellProfileRoute
   '/reports': typeof ShellReportsRoute
+  '/scoring': typeof ShellScoringRoute
   '/settings': typeof ShellSettingsRoute
+  '/shifts': typeof ShellShiftsRoute
   '/team': typeof ShellTeamRoute
   '/workspace': typeof ShellWorkspaceRoute
   '/agents/new': typeof ShellAgentsNewRoute
@@ -317,24 +365,30 @@ export interface FileRoutesById {
   '/_shell/assignments': typeof ShellAssignmentsRoute
   '/_shell/attendance': typeof ShellAttendanceRoute
   '/_shell/audit': typeof ShellAuditRoute
-  '/_shell/avatar-studio': typeof ShellAvatarStudioRoute
   '/_shell/closer-hub': typeof ShellCloserHubRoute
+  '/_shell/company': typeof ShellCompanyRoute
   '/_shell/employees': typeof ShellEmployeesRoute
   '/_shell/exports': typeof ShellExportsRoute
   '/_shell/holidays': typeof ShellHolidaysRoute
   '/_shell/imports': typeof ShellImportsRoute
+  '/_shell/incentives': typeof ShellIncentivesRoute
   '/_shell/leaderboard': typeof ShellLeaderboardRoute
   '/_shell/leave': typeof ShellLeaveRoute
   '/_shell/live': typeof ShellLiveRoute
   '/_shell/mission-control': typeof ShellMissionControlRoute
   '/_shell/notifications': typeof ShellNotificationsRoute
   '/_shell/office-networks': typeof ShellOfficeNetworksRoute
+  '/_shell/operations': typeof ShellOperationsRoute
   '/_shell/payroll': typeof ShellPayrollRoute
   '/_shell/people': typeof ShellPeopleRoute
+  '/_shell/performance': typeof ShellPerformanceRoute
+  '/_shell/policies': typeof ShellPoliciesRoute
   '/_shell/presence': typeof ShellPresenceRoute
   '/_shell/profile': typeof ShellProfileRoute
   '/_shell/reports': typeof ShellReportsRoute
+  '/_shell/scoring': typeof ShellScoringRoute
   '/_shell/settings': typeof ShellSettingsRoute
+  '/_shell/shifts': typeof ShellShiftsRoute
   '/_shell/team': typeof ShellTeamRoute
   '/_shell/workspace': typeof ShellWorkspaceRoute
   '/_shell/agents/new': typeof ShellAgentsNewRoute
@@ -357,24 +411,30 @@ export interface FileRouteTypes {
     | '/assignments'
     | '/attendance'
     | '/audit'
-    | '/avatar-studio'
     | '/closer-hub'
+    | '/company'
     | '/employees'
     | '/exports'
     | '/holidays'
     | '/imports'
+    | '/incentives'
     | '/leaderboard'
     | '/leave'
     | '/live'
     | '/mission-control'
     | '/notifications'
     | '/office-networks'
+    | '/operations'
     | '/payroll'
     | '/people'
+    | '/performance'
+    | '/policies'
     | '/presence'
     | '/profile'
     | '/reports'
+    | '/scoring'
     | '/settings'
+    | '/shifts'
     | '/team'
     | '/workspace'
     | '/agents/new'
@@ -395,24 +455,30 @@ export interface FileRouteTypes {
     | '/assignments'
     | '/attendance'
     | '/audit'
-    | '/avatar-studio'
     | '/closer-hub'
+    | '/company'
     | '/employees'
     | '/exports'
     | '/holidays'
     | '/imports'
+    | '/incentives'
     | '/leaderboard'
     | '/leave'
     | '/live'
     | '/mission-control'
     | '/notifications'
     | '/office-networks'
+    | '/operations'
     | '/payroll'
     | '/people'
+    | '/performance'
+    | '/policies'
     | '/presence'
     | '/profile'
     | '/reports'
+    | '/scoring'
     | '/settings'
+    | '/shifts'
     | '/team'
     | '/workspace'
     | '/agents/new'
@@ -434,24 +500,30 @@ export interface FileRouteTypes {
     | '/_shell/assignments'
     | '/_shell/attendance'
     | '/_shell/audit'
-    | '/_shell/avatar-studio'
     | '/_shell/closer-hub'
+    | '/_shell/company'
     | '/_shell/employees'
     | '/_shell/exports'
     | '/_shell/holidays'
     | '/_shell/imports'
+    | '/_shell/incentives'
     | '/_shell/leaderboard'
     | '/_shell/leave'
     | '/_shell/live'
     | '/_shell/mission-control'
     | '/_shell/notifications'
     | '/_shell/office-networks'
+    | '/_shell/operations'
     | '/_shell/payroll'
     | '/_shell/people'
+    | '/_shell/performance'
+    | '/_shell/policies'
     | '/_shell/presence'
     | '/_shell/profile'
     | '/_shell/reports'
+    | '/_shell/scoring'
     | '/_shell/settings'
+    | '/_shell/shifts'
     | '/_shell/team'
     | '/_shell/workspace'
     | '/_shell/agents/new'
@@ -517,18 +589,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ShellAuditRouteImport
       parentRoute: typeof ShellRoute
     }
-    '/_shell/avatar-studio': {
-      id: '/_shell/avatar-studio'
-      path: '/avatar-studio'
-      fullPath: '/avatar-studio'
-      preLoaderRoute: typeof ShellAvatarStudioRouteImport
-      parentRoute: typeof ShellRoute
-    }
     '/_shell/closer-hub': {
       id: '/_shell/closer-hub'
       path: '/closer-hub'
       fullPath: '/closer-hub'
       preLoaderRoute: typeof ShellCloserHubRouteImport
+      parentRoute: typeof ShellRoute
+    }
+    '/_shell/company': {
+      id: '/_shell/company'
+      path: '/company'
+      fullPath: '/company'
+      preLoaderRoute: typeof ShellCompanyRouteImport
       parentRoute: typeof ShellRoute
     }
     '/_shell/employees': {
@@ -557,6 +629,13 @@ declare module '@tanstack/react-router' {
       path: '/imports'
       fullPath: '/imports'
       preLoaderRoute: typeof ShellImportsRouteImport
+      parentRoute: typeof ShellRoute
+    }
+    '/_shell/incentives': {
+      id: '/_shell/incentives'
+      path: '/incentives'
+      fullPath: '/incentives'
+      preLoaderRoute: typeof ShellIncentivesRouteImport
       parentRoute: typeof ShellRoute
     }
     '/_shell/leaderboard': {
@@ -601,6 +680,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ShellOfficeNetworksRouteImport
       parentRoute: typeof ShellRoute
     }
+    '/_shell/operations': {
+      id: '/_shell/operations'
+      path: '/operations'
+      fullPath: '/operations'
+      preLoaderRoute: typeof ShellOperationsRouteImport
+      parentRoute: typeof ShellRoute
+    }
     '/_shell/payroll': {
       id: '/_shell/payroll'
       path: '/payroll'
@@ -613,6 +699,20 @@ declare module '@tanstack/react-router' {
       path: '/people'
       fullPath: '/people'
       preLoaderRoute: typeof ShellPeopleRouteImport
+      parentRoute: typeof ShellRoute
+    }
+    '/_shell/performance': {
+      id: '/_shell/performance'
+      path: '/performance'
+      fullPath: '/performance'
+      preLoaderRoute: typeof ShellPerformanceRouteImport
+      parentRoute: typeof ShellRoute
+    }
+    '/_shell/policies': {
+      id: '/_shell/policies'
+      path: '/policies'
+      fullPath: '/policies'
+      preLoaderRoute: typeof ShellPoliciesRouteImport
       parentRoute: typeof ShellRoute
     }
     '/_shell/presence': {
@@ -636,11 +736,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ShellReportsRouteImport
       parentRoute: typeof ShellRoute
     }
+    '/_shell/scoring': {
+      id: '/_shell/scoring'
+      path: '/scoring'
+      fullPath: '/scoring'
+      preLoaderRoute: typeof ShellScoringRouteImport
+      parentRoute: typeof ShellRoute
+    }
     '/_shell/settings': {
       id: '/_shell/settings'
       path: '/settings'
       fullPath: '/settings'
       preLoaderRoute: typeof ShellSettingsRouteImport
+      parentRoute: typeof ShellRoute
+    }
+    '/_shell/shifts': {
+      id: '/_shell/shifts'
+      path: '/shifts'
+      fullPath: '/shifts'
+      preLoaderRoute: typeof ShellShiftsRouteImport
       parentRoute: typeof ShellRoute
     }
     '/_shell/team': {
@@ -741,24 +855,30 @@ interface ShellRouteChildren {
   ShellAssignmentsRoute: typeof ShellAssignmentsRoute
   ShellAttendanceRoute: typeof ShellAttendanceRoute
   ShellAuditRoute: typeof ShellAuditRoute
-  ShellAvatarStudioRoute: typeof ShellAvatarStudioRoute
   ShellCloserHubRoute: typeof ShellCloserHubRoute
+  ShellCompanyRoute: typeof ShellCompanyRoute
   ShellEmployeesRoute: typeof ShellEmployeesRoute
   ShellExportsRoute: typeof ShellExportsRoute
   ShellHolidaysRoute: typeof ShellHolidaysRoute
   ShellImportsRoute: typeof ShellImportsRoute
+  ShellIncentivesRoute: typeof ShellIncentivesRoute
   ShellLeaderboardRoute: typeof ShellLeaderboardRoute
   ShellLeaveRoute: typeof ShellLeaveRoute
   ShellLiveRoute: typeof ShellLiveRoute
   ShellMissionControlRoute: typeof ShellMissionControlRoute
   ShellNotificationsRoute: typeof ShellNotificationsRoute
   ShellOfficeNetworksRoute: typeof ShellOfficeNetworksRoute
+  ShellOperationsRoute: typeof ShellOperationsRoute
   ShellPayrollRoute: typeof ShellPayrollRoute
   ShellPeopleRoute: typeof ShellPeopleRoute
+  ShellPerformanceRoute: typeof ShellPerformanceRoute
+  ShellPoliciesRoute: typeof ShellPoliciesRoute
   ShellPresenceRoute: typeof ShellPresenceRoute
   ShellProfileRoute: typeof ShellProfileRoute
   ShellReportsRoute: typeof ShellReportsRoute
+  ShellScoringRoute: typeof ShellScoringRoute
   ShellSettingsRoute: typeof ShellSettingsRoute
+  ShellShiftsRoute: typeof ShellShiftsRoute
   ShellTeamRoute: typeof ShellTeamRoute
   ShellWorkspaceRoute: typeof ShellWorkspaceRoute
   ShellAgentsNewRoute: typeof ShellAgentsNewRoute
@@ -778,24 +898,30 @@ const ShellRouteChildren: ShellRouteChildren = {
   ShellAssignmentsRoute: ShellAssignmentsRoute,
   ShellAttendanceRoute: ShellAttendanceRoute,
   ShellAuditRoute: ShellAuditRoute,
-  ShellAvatarStudioRoute: ShellAvatarStudioRoute,
   ShellCloserHubRoute: ShellCloserHubRoute,
+  ShellCompanyRoute: ShellCompanyRoute,
   ShellEmployeesRoute: ShellEmployeesRoute,
   ShellExportsRoute: ShellExportsRoute,
   ShellHolidaysRoute: ShellHolidaysRoute,
   ShellImportsRoute: ShellImportsRoute,
+  ShellIncentivesRoute: ShellIncentivesRoute,
   ShellLeaderboardRoute: ShellLeaderboardRoute,
   ShellLeaveRoute: ShellLeaveRoute,
   ShellLiveRoute: ShellLiveRoute,
   ShellMissionControlRoute: ShellMissionControlRoute,
   ShellNotificationsRoute: ShellNotificationsRoute,
   ShellOfficeNetworksRoute: ShellOfficeNetworksRoute,
+  ShellOperationsRoute: ShellOperationsRoute,
   ShellPayrollRoute: ShellPayrollRoute,
   ShellPeopleRoute: ShellPeopleRoute,
+  ShellPerformanceRoute: ShellPerformanceRoute,
+  ShellPoliciesRoute: ShellPoliciesRoute,
   ShellPresenceRoute: ShellPresenceRoute,
   ShellProfileRoute: ShellProfileRoute,
   ShellReportsRoute: ShellReportsRoute,
+  ShellScoringRoute: ShellScoringRoute,
   ShellSettingsRoute: ShellSettingsRoute,
+  ShellShiftsRoute: ShellShiftsRoute,
   ShellTeamRoute: ShellTeamRoute,
   ShellWorkspaceRoute: ShellWorkspaceRoute,
   ShellAgentsNewRoute: ShellAgentsNewRoute,

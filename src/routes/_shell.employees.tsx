@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import {
@@ -23,64 +23,83 @@ import {
   ProcessBadge,
   SectionCard,
 } from "@/components/officeverse/primitives";
-import { EmployeeIdentity } from "@/components/officeverse/employee-identity";
-import { IdentityToggle } from "@/components/officeverse/identity-controls";
-import { useIdentityMode } from "@/lib/officeverse/identity";
-import { EMPLOYEES } from "@/lib/officeverse/data";
+import { RoleGate } from "@/components/officeverse/role-gate";
+import { StaffAvatar } from "@/components/officeverse/staff-avatar";
+import { StaffEditDialog } from "@/components/officeverse/staff-edit-dialog";
+import { Button } from "@/components/ui/button";
+import { useServerStaff } from "@/lib/officeverse/use-staff";
+import type { StaffDTO } from "@/server/staff/service";
 
 export const Route = createFileRoute("/_shell/employees")({
   head: () => ({
     meta: [
-      { title: "Employees — TeleMaster India" },
+      { title: "Employees — TMI Officeverse CRM" },
       {
         name: "description",
-        content: "Searchable directory of everyone on the floor with department and status.",
+        content: "Searchable directory of every agent and closer with process and status.",
       },
-      { property: "og:title", content: "Employees — TeleMaster India" },
+      { property: "og:title", content: "Employees — TMI Officeverse CRM" },
       {
         property: "og:description",
-        content: "Employee directory with departments, processes and status.",
+        content: "Employee directory with roles, processes and status.",
       },
     ],
   }),
-  component: EmployeesPage,
+  component: () => (
+    <RoleGate allow={["admin", "hr"]}>
+      <EmployeesPage />
+    </RoleGate>
+  ),
 });
 
-const DEPARTMENTS = ["All", "Sales", "Closing", "People", "Operations"];
+const ROLE_FILTER = ["All", "Agents", "Closers"] as const;
+const STATUS_LABEL: Record<string, string> = {
+  active: "Active",
+  inactive: "Inactive",
+  suspended: "Suspended",
+  on_leave: "On leave",
+};
 
 function EmployeesPage() {
   const [q, setQ] = useState("");
-  const [dept, setDept] = useState("All");
-  const [idMode, setIdMode] = useIdentityMode("photo");
+  const [role, setRole] = useState<(typeof ROLE_FILTER)[number]>("All");
+  const [detail, setDetail] = useState<StaffDTO | null>(null);
+  const { staff: agents } = useServerStaff("agent");
+  const { staff: closers } = useServerStaff("closer");
 
-  const rows = EMPLOYEES.filter(
-    (e) =>
-      (dept === "All" || e.department === dept) &&
-      (e.name.toLowerCase().includes(q.trim().toLowerCase()) ||
-        e.employee_id.toLowerCase().includes(q.trim().toLowerCase())),
-  );
+  const rows = useMemo(() => {
+    const all = [
+      ...(role !== "Closers" ? agents.map((a) => ({ ...a, roleLabel: "Sales Agent" })) : []),
+      ...(role !== "Agents" ? closers.map((c) => ({ ...c, roleLabel: "Closer" })) : []),
+    ];
+    const s = q.trim().toLowerCase();
+    return all.filter(
+      (e) =>
+        !s ||
+        e.full_name.toLowerCase().includes(s) ||
+        e.email.toLowerCase().includes(s) ||
+        e.code.toLowerCase().includes(s),
+    );
+  }, [agents, closers, role, q]);
 
   return (
     <div className="space-y-7">
-      <PageHeader title="Employees" description="One directory for the whole floor." />
+      <PageHeader title="Employees" description="One directory for every agent and closer." />
 
-      <SectionCard
-        title={`${rows.length} people`}
-        action={<IdentityToggle mode={idMode} onChange={setIdMode} />}
-      >
+      <SectionCard title={`${rows.length} people`}>
         <div className="flex flex-col gap-3 sm:flex-row">
           <Input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Search by name or employee ID"
+            placeholder="Search by name, email or ID"
             className="rounded-full sm:max-w-xs"
           />
-          <Select value={dept} onValueChange={setDept}>
+          <Select value={role} onValueChange={(v) => setRole(v as (typeof ROLE_FILTER)[number])}>
             <SelectTrigger className="rounded-full sm:w-48">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {DEPARTMENTS.map((d) => (
+              {ROLE_FILTER.map((d) => (
                 <SelectItem key={d} value={d}>
                   {d}
                 </SelectItem>
@@ -91,7 +110,7 @@ function EmployeesPage() {
 
         {rows.length === 0 ? (
           <div className="mt-6">
-            <EmptyState title="No one matches" message="Try another name, ID or department." />
+            <EmptyState title="No one matches" message="Try another name, ID or role." />
           </div>
         ) : (
           <div className="mt-5 overflow-x-auto">
@@ -99,41 +118,50 @@ function EmployeesPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Employee</TableHead>
-                  <TableHead>ID</TableHead>
-                  <TableHead>Department</TableHead>
-                  <TableHead>Process</TableHead>
-                  <TableHead>Joined</TableHead>
+                  <TableHead>Employee ID</TableHead>
+                  <TableHead>Role</TableHead>
+                  <TableHead>Process / shift</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead className="text-right">Action</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {rows.map((e) => (
-                  <TableRow key={e.id}>
+                  <TableRow key={e.code}>
                     <TableCell>
                       <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-3">
-                        <EmployeeIdentity
-                          name={e.name}
-                          mode={idMode}
-                          size="small"
-                          presence={e.presence}
-                          process={e.process}
+                        <StaffAvatar
+                          userId={e.user_id}
+                          name={e.full_name}
+                          hasPhoto={e.photo_available}
+                          size="medium"
+                          process={e.process as never}
                         />
                         <div className="min-w-0">
-                          <p className="truncate font-medium">{e.name}</p>
-                          <p className="truncate text-xs text-muted-foreground">{e.designation}</p>
+                          <p className="truncate font-medium">{e.full_name}</p>
+                          <p className="truncate text-xs text-muted-foreground">{e.roleLabel}</p>
                         </div>
                       </div>
                     </TableCell>
-                    <TableCell className="text-muted-foreground">{e.employee_id}</TableCell>
-                    <TableCell className="text-muted-foreground">{e.department}</TableCell>
+                    <TableCell className="font-mono text-muted-foreground">{e.code}</TableCell>
+                    <TableCell className="text-muted-foreground">{e.roleLabel}</TableCell>
                     <TableCell>
-                      <ProcessBadge code={e.process} compact />
+                      <ProcessBadge code={e.process as never} compact />
                     </TableCell>
-                    <TableCell className="text-muted-foreground">{e.joining_date}</TableCell>
                     <TableCell>
                       <Badge variant="secondary" className="rounded-full">
-                        {e.status}
+                        {STATUS_LABEL[e.status] ?? e.status}
                       </Badge>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-8 rounded-full text-xs"
+                        onClick={() => setDetail(e)}
+                      >
+                        Edit
+                      </Button>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -142,6 +170,8 @@ function EmployeesPage() {
           </div>
         )}
       </SectionCard>
+
+      <StaffEditDialog staff={detail} onOpenChange={(v) => !v && setDetail(null)} />
     </div>
   );
 }

@@ -4,6 +4,8 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState, PageHeader, SectionCard } from "@/components/officeverse/primitives";
+import { StaffAvatar } from "@/components/officeverse/staff-avatar";
+import { ProcessFilter, type ProcessFilterValue } from "@/components/officeverse/process-filter";
 import {
   useAdminAttendance,
   useCorrectAttendance,
@@ -222,18 +224,12 @@ function AdminSection() {
           value={filters.employee ?? ""}
           onChange={(e) => set("employee", e.target.value)}
         />
-        <select
-          className="rounded-lg border border-border bg-card px-2 py-1.5 text-sm"
-          value={filters.process ?? ""}
-          onChange={(e) => set("process", e.target.value)}
-        >
-          <option value="">Any process</option>
-          {["US", "IN", "UK", "AU"].map((p) => (
-            <option key={p} value={p}>
-              {p}
-            </option>
-          ))}
-        </select>
+        <ProcessFilter
+          value={(filters.process ?? "ALL") as ProcessFilterValue}
+          onChange={(v) => set("process", v === "ALL" ? "" : v)}
+          label="Filter attendance by process"
+          className="col-span-2 justify-start sm:col-span-3 lg:col-span-2"
+        />
         <select
           className="rounded-lg border border-border bg-card px-2 py-1.5 text-sm"
           value={filters.shiftName ?? ""}
@@ -329,7 +325,25 @@ function AttendanceTr({
   return (
     <>
       <tr className="border-t border-border/60">
-        {showEmployee ? <td className="px-3 py-2 font-medium">{r.employeeName ?? "—"}</td> : null}
+        {showEmployee ? (
+          <td className="px-3 py-2">
+            <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-2">
+              <StaffAvatar
+                userId={r.userId ?? null}
+                name={r.employeeName ?? "—"}
+                hasPhoto={r.photoAvailable ?? false}
+                size="small"
+                process={r.process as never}
+              />
+              <div className="min-w-0">
+                <p className="truncate font-medium">{r.employeeName ?? "—"}</p>
+                <p className="truncate text-[11px] text-muted-foreground">
+                  {r.employeeCode ?? "—"}
+                </p>
+              </div>
+            </div>
+          </td>
+        ) : null}
         <td className="px-3 py-2 text-muted-foreground">{r.role}</td>
         <td className="px-3 py-2 text-muted-foreground">{r.process}</td>
         <td className="px-3 py-2 text-muted-foreground">{r.shiftName}</td>

@@ -34,10 +34,10 @@ const fuConverted = { ownerUserId: 10, status: "CONVERTED" } as const;
 const fuCloserScheduled = { ownerUserId: 20, status: "SCHEDULED" } as const;
 
 describe("read", () => {
-  it("owner and admin/hr can read; another agent cannot", () => {
+  it("owner and admin can read; HR and another agent cannot (HR role separation)", () => {
     expect(canReadFollowUp(agentOwner, fuScheduled)).toBe(true);
     expect(canReadFollowUp(admin, fuScheduled)).toBe(true);
-    expect(canReadFollowUp(hr, fuScheduled)).toBe(true);
+    expect(canReadFollowUp(hr, fuScheduled)).toBe(false);
     expect(canReadFollowUp(otherAgent, fuScheduled)).toBe(false);
   });
   it("history visibility mirrors follow-up visibility", () => {
@@ -160,9 +160,9 @@ describe("filterCustomerPatch", () => {
 });
 
 describe("followUpScope", () => {
-  it("admin/hr → all; owner → own user id", () => {
+  it("admin → all; HR → own id (empty, module-gated in the service); owner → own user id", () => {
     expect(followUpScope(admin)).toEqual({ kind: "all" });
-    expect(followUpScope(hr)).toEqual({ kind: "all" });
+    expect(followUpScope(hr)).toEqual({ kind: "owner", ownerUserId: 2 });
     expect(followUpScope(agentOwner)).toEqual({ kind: "owner", ownerUserId: 10 });
     expect(followUpScope(closerOwner)).toEqual({ kind: "owner", ownerUserId: 20 });
   });

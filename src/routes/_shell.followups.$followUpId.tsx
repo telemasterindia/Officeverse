@@ -16,20 +16,23 @@ import {
 } from "@/components/ui/select";
 import { LeadIdChip, PageHeader, SectionCard } from "@/components/officeverse/primitives";
 import { FollowUpStatusBadge } from "@/components/officeverse/follow-up-detail";
-import { CLOSERS } from "@/lib/officeverse/data";
 import {
-  buildScheduledAt,
-  cancelFollowUp,
-  completeFollowUp,
-  convertFollowUpToLead,
   displayDateTime,
-  rescheduleFollowUp,
   scheduledParts,
-  updateFollowUpCustomer,
-  type FollowUpAttempt,
   type FollowUpCustomer,
 } from "@/lib/officeverse/followups";
-import { useFollowUps } from "@/lib/officeverse/use-crm";
+import type { FollowUpAttemptDTO, FollowUpCustomerDTO } from "@/server/followups/dto";
+import {
+  leadDtoToUi,
+  useAssignableClosers,
+  useCancelServerFollowUp,
+  useCompleteServerFollowUp,
+  useConvertServerFollowUp,
+  useRescheduleServerFollowUp,
+  useServerFollowUp,
+  useUpdateServerFollowUpCustomer,
+} from "@/lib/officeverse/use-lead-lifecycle";
+import { US_STATES, isUsStateCode, sanitizeZip } from "@/lib/officeverse/us-states";
 import { useSession } from "@/lib/officeverse/session";
 
 export const Route = createFileRoute("/_shell/followups/$followUpId")({
@@ -39,11 +42,19 @@ export const Route = createFileRoute("/_shell/followups/$followUpId")({
   component: FollowUpRecordPage,
 });
 
-const OUTCOME_LABEL: Record<FollowUpAttempt["outcome"], string> = {
+const OUTCOME_LABEL: Record<FollowUpAttemptDTO["outcome"], string> = {
+  SCHEDULED: "Scheduled",
   RESCHEDULED: "Not Reached / Rescheduled",
   COMPLETED: "Completed",
   CANCELLED: "Cancelled",
+  CONVERTED: "Converted to Lead",
 };
+
+/** DTO → the demo `FollowUpCustomer` shape the edit form uses (nullable
+ *  `current_late` is normalised to the empty-string sentinel). */
+function toEditableCustomer(d: FollowUpCustomerDTO): FollowUpCustomer {
+  return { ...d, current_late: d.current_late ?? "" };
+}
 
 function EditRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -67,8 +78,19 @@ function FollowUpRecordPage() {
   const { followUpId } = Route.useParams();
   const { user } = useSession();
   const navigate = useNavigate();
-  const all = useFollowUps();
-  const fu = all.find((f) => f.follow_up_id === followUpId) ?? null;
+  const { followUp: fu, isLoading } = useServerFollowUp(followUpId);
+  const { closers } = useAssignableClosers();
+  const updateCustM = useUpdateServerFollowUpCustomer();
+  const rescheduleM = useRescheduleServerFollowUp();
+  const completeM = useCompleteServerFollowUp();
+  const cancelM = useCancelServerFollowUp();
+  const convertM = useConvertServerFollowUp();
+  const busy =
+    updateCustM.isPending ||
+    rescheduleM.isPending ||
+    completeM.isPending ||
+    cancelM.isPending ||
+    convertM.isPending;
 
   const [cust, setCust] = useState<FollowUpCustomer | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -78,20 +100,27 @@ function FollowUpRecordPage() {
   const [rsNote, setRsNote] = useState("");
   const [convCloser, setConvCloser] = useState("");
 
+  // Re-sync the local editable copy whenever the authoritative record changes
+  // identity or is mutated server-side (updated_at moves on every write).
+  const syncKey = fu ? `${fu.follow_up_id}:${fu.updated_at}` : null;
   useEffect(() => {
     if (!fu) return;
-    setCust({ ...fu.customer });
+    setCust(toEditableCustomer(fu.customer));
     const p = scheduledParts(fu.scheduled_at);
     setRsDate(p.date);
     setRsTime(p.time);
     setRsNote("");
     setMode("view");
     setDirty(false);
-  }, [fu]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [syncKey]);
 
   if (!user) return null;
 
   if (!fu) {
+    if (isLoading) {
+      return <p className="py-16 text-center text-sm text-muted-foreground">Loading follow-up…</p>;
+    }
     return (
       <div className="space-y-6">
         <PageHeader
@@ -107,59 +136,99 @@ function FollowUpRecordPage() {
     );
   }
 
-  const c = cust ?? fu.customer;
-  const isOwner = fu.owner_id === user.id || fu.owner_name === user.name;
+  const c = cust ?? toEditableCustomer(fu.customer);
+  // Button visibility only — every mutation below is re-authorised server-side
+  // against the real owner / role / process.
+  const isOwner = fu.owner_name === user.name;
   const isAdmin = user.role === "admin" || user.role === "hr";
   const canManage = isOwner && fu.status === "SCHEDULED";
 
   const set = <K extends keyof FollowUpCustomer>(k: K, v: FollowUpCustomer[K]) => {
-    setCust((prev) => ({ ...(prev ?? fu.customer), [k]: v }));
+    setCust((prev) => ({ ...(prev ?? toEditableCustomer(fu.customer)), [k]: v }));
     setDirty(true);
   };
 
-  const saveCustomer = () => {
+  const saveCustomer = async () => {
     if (!cust) return;
-    updateFollowUpCustomer(fu.follow_up_id, cust);
-    setDirty(false);
-    toast("Customer details updated");
+    const patch: Record<string, unknown> = {
+      full_name: cust.full_name,
+      phone: cust.phone,
+      email: cust.email,
+      address: cust.address,
+      city: cust.city,
+      state: cust.state,
+      zip: cust.zip,
+      debt_amount: cust.debt_amount,
+      credit: cust.credit,
+      comment: cust.comment,
+    };
+    if (cust.current_late === "Current" || cust.current_late === "Late") {
+      patch["current_late"] = cust.current_late;
+    }
+    try {
+      await updateCustM.mutateAsync({ code: fu.follow_up_id, patch });
+      setDirty(false);
+      toast("Customer details updated");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not update the customer");
+    }
   };
 
-  const doReschedule = () => {
+  const doReschedule = async () => {
     if (!rsDate || !rsTime) return;
-    const at = buildScheduledAt(rsDate, rsTime);
-    rescheduleFollowUp(fu.follow_up_id, at, rsNote);
-    toast("Follow-up rescheduled — reminders re-armed", {
-      description: "The previous callback is kept in the history.",
-    });
-    setMode("view");
+    try {
+      await rescheduleM.mutateAsync({
+        code: fu.follow_up_id,
+        scheduled_date: rsDate,
+        scheduled_time: rsTime,
+        ...(rsNote ? { reason: rsNote } : {}),
+        expected_scheduled_at: fu.scheduled_at,
+      });
+      toast("Follow-up rescheduled — reminders re-armed", {
+        description: "The previous callback is kept in the history.",
+      });
+      setMode("view");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not reschedule");
+    }
   };
 
-  const doComplete = () => {
-    completeFollowUp(fu.follow_up_id);
-    toast("✅ Follow-up completed");
-    navigate({ to: "/followups" });
+  const doComplete = async () => {
+    try {
+      await completeM.mutateAsync({ code: fu.follow_up_id });
+      toast("✅ Follow-up completed");
+      navigate({ to: "/followups" });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not complete");
+    }
   };
 
-  const doCancel = () => {
-    cancelFollowUp(fu.follow_up_id);
-    toast("Follow-up cancelled");
-    navigate({ to: "/followups" });
+  const doCancel = async () => {
+    try {
+      await cancelM.mutateAsync({ code: fu.follow_up_id });
+      toast("Follow-up cancelled");
+      navigate({ to: "/followups" });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not cancel");
+    }
   };
 
   // A closer's follow-up converts to a Lead that STAYS with that same closer —
   // no closer-selection step. An agent's follow-up requires picking a closer.
   const isCloserOwned = fu.owner_role === "closer";
-  const doConvert = () => {
+  const doConvert = async () => {
     if (!isCloserOwned && !convCloser) return;
-    const res = convertFollowUpToLead(fu.follow_up_id, {
-      ...(convCloser ? { closer: convCloser } : {}),
-      actor: user.name,
-      process: user.process,
-    });
-    if (!res) return;
-    const dest = res.lead.assigned_closer;
-    toast("✅ Converted", { description: `${res.lead.lead_id} → ${dest}` });
-    navigate({ to: "/leads/$leadId", params: { leadId: res.lead.lead_id } });
+    try {
+      const res = await convertM.mutateAsync({
+        code: fu.follow_up_id,
+        ...(convCloser ? { to_closer_code: convCloser } : {}),
+      });
+      const dest = leadDtoToUi(res.lead).assigned_closer;
+      toast("✅ Converted", { description: `${res.lead.lead_id} → ${dest}` });
+      navigate({ to: "/leads/$leadId", params: { leadId: res.lead.lead_id } });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not convert to Lead");
+    }
   };
 
   const attempts = fu.attempts;
@@ -209,7 +278,7 @@ function FollowUpRecordPage() {
                 >
                   <ArrowRightLeft className="mr-1.5 h-4 w-4" /> Convert to Lead
                 </Button>
-                <Button size="sm" className="rounded-lg" onClick={doComplete}>
+                <Button size="sm" className="rounded-lg" onClick={doComplete} disabled={busy}>
                   <CheckCircle2 className="mr-1.5 h-4 w-4" /> Complete
                 </Button>
                 <Button
@@ -217,6 +286,7 @@ function FollowUpRecordPage() {
                   variant="outline"
                   className="rounded-lg text-destructive"
                   onClick={doCancel}
+                  disabled={busy}
                 >
                   <Ban className="mr-1.5 h-4 w-4" /> Cancel
                 </Button>
@@ -284,7 +354,11 @@ function FollowUpRecordPage() {
               />
             </div>
             <div className="flex gap-2">
-              <Button className="rounded-lg" onClick={doReschedule} disabled={!rsDate || !rsTime}>
+              <Button
+                className="rounded-lg"
+                onClick={doReschedule}
+                disabled={!rsDate || !rsTime || busy}
+              >
                 Save new time
               </Button>
               <Button variant="ghost" className="rounded-lg" onClick={() => setMode("view")}>
@@ -318,9 +392,9 @@ function FollowUpRecordPage() {
                     <SelectValue placeholder="Select Closer" />
                   </SelectTrigger>
                   <SelectContent>
-                    {CLOSERS.map((cl) => (
-                      <SelectItem key={cl} value={cl}>
-                        {cl}
+                    {closers.map((cl) => (
+                      <SelectItem key={cl.code} value={cl.code}>
+                        {cl.name} · {cl.code}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -331,7 +405,7 @@ function FollowUpRecordPage() {
               <Button
                 className="rounded-lg"
                 onClick={doConvert}
-                disabled={!isCloserOwned && !convCloser}
+                disabled={(!isCloserOwned && !convCloser) || busy}
               >
                 {isCloserOwned ? "Convert to Lead" : "Convert & Assign Lead"}
               </Button>
@@ -353,7 +427,7 @@ function FollowUpRecordPage() {
           }
           action={
             canManage && dirty ? (
-              <Button size="sm" className="rounded-lg" onClick={saveCustomer}>
+              <Button size="sm" className="rounded-lg" onClick={saveCustomer} disabled={busy}>
                 Save changes
               </Button>
             ) : null
@@ -377,10 +451,35 @@ function FollowUpRecordPage() {
                 <Input value={c.city} onChange={(e) => set("city", e.target.value)} />
               </EditRow>
               <EditRow label="State">
-                <Input value={c.state} onChange={(e) => set("state", e.target.value)} />
+                {user?.process === "US" ? (
+                  <select
+                    value={isUsStateCode(c.state) ? c.state.toUpperCase() : ""}
+                    onChange={(e) => set("state", e.target.value)}
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <option value="">Select state…</option>
+                    {!isUsStateCode(c.state) && c.state ? (
+                      <option value={c.state}>{c.state} (current)</option>
+                    ) : null}
+                    {US_STATES.map((s) => (
+                      <option key={s.code} value={s.code}>
+                        {s.code} — {s.name}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <Input value={c.state} onChange={(e) => set("state", e.target.value)} />
+                )}
               </EditRow>
               <EditRow label="ZIP">
-                <Input value={c.zip} onChange={(e) => set("zip", e.target.value)} />
+                <Input
+                  value={c.zip}
+                  inputMode="numeric"
+                  autoComplete="postal-code"
+                  maxLength={10}
+                  pattern="\d{5}(-\d{4})?"
+                  onChange={(e) => set("zip", sanitizeZip(e.target.value))}
+                />
               </EditRow>
               <EditRow label="Debt amount">
                 <Input

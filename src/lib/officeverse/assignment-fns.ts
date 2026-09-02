@@ -13,14 +13,22 @@ import { z } from "zod";
 import { requireUser, requestInfo } from "@/server/context";
 import * as svc from "@/server/assignments/service";
 
-const workType = z.enum(["AGENT_FOLLOWUPS", "CLOSER_LEADS", "CLOSER_FOLLOWUPS"]);
+const workType = z.enum([
+  "AGENT_FOLLOWUPS",
+  "CLOSER_LEADS",
+  "CLOSER_FOLLOWUPS",
+  "CLOSER_FOLLOWUPS_TO_AGENT",
+]);
+const transferScope = z.enum(["OVERDUE", "DUE_TODAY", "UPCOMING", "ALL_PENDING", "SELECTED"]);
 const ownerId = z.coerce.number().int().positive();
 
 export const assignmentRosterFn = createServerFn({ method: "GET" })
-  .inputValidator(() => ({}))
-  .handler(async () => {
+  .inputValidator((d: unknown) =>
+    z.object({ process: z.enum(["US", "UK", "IN", "AU"]).optional() }).parse(d ?? {}),
+  )
+  .handler(async ({ data }) => {
     const user = await requireUser();
-    return svc.assignmentRoster(user);
+    return svc.assignmentRoster(user, data.process ? { process: data.process } : {});
   });
 
 export const assignmentWorkloadFn = createServerFn({ method: "GET" })
@@ -47,6 +55,8 @@ export const reassignBulkFn = createServerFn({ method: "POST" })
           z.array(z.coerce.number().int().positive()).max(5000),
           z.literal("ALL"),
         ]),
+        /** §2/§3 — server resolves the ids for every scope except SELECTED */
+        scope: transferScope.optional(),
         reason: z.string().trim().max(500).optional(),
       })
       .parse(d),
@@ -60,10 +70,20 @@ export const reassignBulkFn = createServerFn({ method: "POST" })
         fromOwnerId: data.fromOwnerId,
         toOwnerId: data.toOwnerId,
         selection: data.selection,
+        ...(data.scope !== undefined ? { scope: data.scope } : {}),
         ...(data.reason !== undefined ? { reason: data.reason } : {}),
       },
       requestInfo(),
     );
+  });
+
+export const longDatedFollowUpsFn = createServerFn({ method: "GET" })
+  .inputValidator((d: unknown) =>
+    z.object({ process: z.enum(["US", "UK", "IN", "AU"]).optional() }).parse(d ?? {}),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return svc.longDatedFollowUps(user, data.process ? { process: data.process } : {});
   });
 
 export const assignmentHistoryFn = createServerFn({ method: "GET" })

@@ -11,7 +11,13 @@ const URGENCY_STYLE: Record<FollowUpUrgency, string> = {
 };
 
 /** Small status pill used across the follow-up list, calendar and record pages. */
-export function FollowUpStatusBadge({ fu, className }: { fu: FollowUpRecord; className?: string }) {
+export function FollowUpStatusBadge({
+  fu,
+  className,
+}: {
+  fu: Pick<FollowUpRecord, "status" | "scheduled_at">;
+  className?: string;
+}) {
   const u = urgencyOf(fu);
   return (
     <span

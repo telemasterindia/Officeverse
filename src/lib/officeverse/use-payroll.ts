@@ -7,7 +7,10 @@ import {
   adminOvertimeFn,
   adminPayrollFn,
   approvePayrollFn,
+  attendanceRegisterFn,
+  calculateAllPayrollFn,
   calculatePayrollFn,
+  consolidatedPayrollFn,
   decideOvertimeFn,
   employmentPeriodsFn,
   lockPayrollFn,
@@ -21,7 +24,9 @@ import {
   setSalaryProfileFn,
   voidAdjustmentFn,
 } from "./payroll-fns";
+import type { AttendanceRegister, ConsolidatedPayroll } from "@/server/hr/payroll-register-service";
 
+export type { AttendanceRegister, ConsolidatedPayroll };
 export type ProcessCode = "US" | "UK" | "IN" | "AU";
 export type PayrollStatus = "DRAFT" | "CALCULATED" | "APPROVED" | "LOCKED";
 
@@ -48,10 +53,16 @@ export function useMyPayroll(month?: string) {
   });
 }
 
-export function useSalaryProfiles(employee?: string) {
+export function useSalaryProfiles(employee?: string, process?: ProcessCode) {
   return useQuery({
-    queryKey: ["payroll", "salary-profiles", employee ?? ""],
-    queryFn: () => salaryProfilesFn({ data: employee ? { employee } : {} }),
+    queryKey: ["payroll", "salary-profiles", employee ?? "", process ?? "ALL"],
+    queryFn: () =>
+      salaryProfilesFn({
+        data: {
+          ...(employee ? { employee } : {}),
+          ...(process ? { process } : {}),
+        },
+      }),
     staleTime: 20_000,
   });
 }
@@ -59,8 +70,15 @@ export function useSalaryProfiles(employee?: string) {
 export function useSetSalaryProfile() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (v: { userId: number; baseSalary: number; effectiveFrom: string; note?: string }) =>
-      setSalaryProfileFn({ data: v }),
+    mutationFn: (v: {
+      employeeId: string;
+      baseSalary: number;
+      effectiveFrom: string;
+      note?: string;
+    }) => {
+      const { employeeId, ...rest } = v;
+      return setSalaryProfileFn({ data: { employee_id: employeeId, ...rest } });
+    },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["payroll"] }),
   });
 }
@@ -68,7 +86,8 @@ export function useSetSalaryProfile() {
 export function useCalculatePayroll() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (v: { userId: number; month: string }) => calculatePayrollFn({ data: v }),
+    mutationFn: (v: { employeeId: string; month: string }) =>
+      calculatePayrollFn({ data: { employee_id: v.employeeId, month: v.month } }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["payroll"] }),
   });
 }
@@ -94,6 +113,45 @@ export function useReopenPayroll() {
   return useMutation({
     mutationFn: (v: { userId: number; month: string; reason: string }) =>
       reopenPayrollFn({ data: v }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["payroll"] }),
+  });
+}
+
+/* ----------- Monthly Attendance Register + Consolidated Payroll ---------- */
+
+export interface RegisterQuery {
+  month: string;
+  process?: ProcessCode | undefined;
+  q?: string | undefined;
+}
+const registerArgs = (r: RegisterQuery) => ({
+  month: r.month,
+  ...(r.process ? { process: r.process } : {}),
+  ...(r.q && r.q.trim() ? { q: r.q.trim() } : {}),
+});
+
+export function useAttendanceRegister(r: RegisterQuery) {
+  return useQuery<AttendanceRegister>({
+    queryKey: ["payroll", "attendance-register", r.month, r.process ?? "ALL", r.q ?? ""],
+    queryFn: () => attendanceRegisterFn({ data: registerArgs(r) }),
+    enabled: /^\d{4}-\d{2}$/.test(r.month),
+    staleTime: 10_000,
+  });
+}
+
+export function useConsolidatedPayroll(r: RegisterQuery) {
+  return useQuery<ConsolidatedPayroll>({
+    queryKey: ["payroll", "consolidated", r.month, r.process ?? "ALL", r.q ?? ""],
+    queryFn: () => consolidatedPayrollFn({ data: registerArgs(r) }),
+    enabled: /^\d{4}-\d{2}$/.test(r.month),
+    staleTime: 10_000,
+  });
+}
+
+export function useCalculateAllPayroll() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (r: RegisterQuery) => calculateAllPayrollFn({ data: registerArgs(r) }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["payroll"] }),
   });
 }

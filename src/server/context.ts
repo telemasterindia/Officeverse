@@ -6,10 +6,11 @@
  * function that touches data calls one of them. RoleGate on the client is a UX
  * convenience only.
  */
-import { getRequestHeader, getRequestIP } from "@tanstack/react-start/server";
+import { getRequestHeader } from "@tanstack/react-start/server";
 import { HttpError } from "./http-error";
 import { devResolve } from "./auth/dev-auth";
 import { touchAttendanceSafe } from "./attendance/service";
+import { resolveClientIp } from "./net/client-ip";
 import { readSessionToken, resolveSession, type SessionContext } from "./session";
 import type { User } from "@/lib/db/schema";
 
@@ -23,9 +24,12 @@ export interface RequestInfo {
 }
 
 export function requestInfo(): RequestInfo {
+  // Audit C-1: the client IP is resolved from the socket peer and is only
+  // taken from X-Forwarded-For when the peer is a configured trusted proxy.
+  // A spoofed forwarding header can never become an office IP.
   let ip: string | null = null;
   try {
-    ip = getRequestIP({ xForwardedFor: true }) ?? null;
+    ip = resolveClientIp();
   } catch {
     ip = null;
   }

@@ -1,16 +1,5 @@
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
-import {
-  Bell,
-  LogOut,
-  Menu,
-  Moon,
-  Palette,
-  Search,
-  Settings,
-  Sun,
-  UserCircle,
-  X,
-} from "lucide-react";
+import { Bell, LogOut, Menu, Moon, Search, Settings, Sun, UserCircle, X } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -28,13 +17,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { DEFAULT_AVATAR } from "@/lib/officeverse/avatar";
 import { PROCESSES, ROLE_LABEL } from "@/lib/officeverse/data";
 import { useSession } from "@/lib/officeverse/session";
 import type { ProcessCode } from "@/lib/officeverse/types";
 import { roomForPath } from "@/lib/officeverse/visual";
 import { useEmployeePhoto } from "@/lib/officeverse/identity";
-import { AvatarDisplay } from "./avatar-display";
+import { photoDataUrl, useProfilePhoto } from "@/lib/officeverse/use-photo";
+import { PhotoDisplay } from "./photo/PhotoDisplay";
 import { RoomNavigation } from "./room-nav";
 import { ShiftBadge } from "./shift-badge";
 import { SearchCommand } from "./search-command";
@@ -72,11 +61,14 @@ function TopBar({
   onOpenSearch: () => void;
   onOpenMenu: () => void;
 }) {
-  const { user, avatar, theme, toggleTheme, signOut, setProcess } = useSession();
+  const { user, theme, toggleTheme, signOut, setProcess } = useSession();
   const navigate = useNavigate();
-  const photo = useEmployeePhoto(user?.name ?? "");
+  // Canonical identity = the real Phase-19 server photo; the per-device
+  // localStorage photo is the fallback; otherwise a professional initials chip.
+  const serverPhoto = photoDataUrl(useProfilePhoto().data);
+  const localPhoto = useEmployeePhoto(user?.name ?? "");
+  const photo = serverPhoto ?? localPhoto ?? null;
   if (!user) return null;
-  const cfg = avatar ?? DEFAULT_AVATAR;
 
   return (
     <header className="sticky top-0 z-30 grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 border-b border-border bg-card/95 px-4 py-3 backdrop-blur lg:px-6">
@@ -150,10 +142,10 @@ function TopBar({
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button className="flex items-center gap-2 rounded-xl px-1.5 py-1 transition-colors hover:bg-secondary/60">
-              <AvatarDisplay
-                config={cfg}
-                photo={photo}
+              <PhotoDisplay
+                src={photo}
                 name={user.name}
+                process={user.process}
                 size="sm"
                 presence="online"
               />
@@ -170,7 +162,7 @@ function TopBar({
           <DropdownMenuContent align="end" className="w-56">
             <DropdownMenuLabel>
               <div className="flex items-center gap-2">
-                <AvatarDisplay config={cfg} photo={photo} name={user.name} size="sm" />
+                <PhotoDisplay src={photo} name={user.name} process={user.process} size="sm" />
                 <div className="min-w-0">
                   <p className="truncate text-sm font-semibold">{user.name}</p>
                   <p className="truncate text-xs font-normal text-muted-foreground">
@@ -183,11 +175,6 @@ function TopBar({
             <DropdownMenuItem asChild>
               <Link to="/profile">
                 <UserCircle className="mr-2 h-4 w-4" /> My Profile
-              </Link>
-            </DropdownMenuItem>
-            <DropdownMenuItem asChild>
-              <Link to="/avatar-studio">
-                <Palette className="mr-2 h-4 w-4" /> Avatar Studio
               </Link>
             </DropdownMenuItem>
             <DropdownMenuItem asChild>

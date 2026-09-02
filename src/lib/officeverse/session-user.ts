@@ -18,6 +18,9 @@ export interface PublicUserLike {
   status?: string;
   phone?: string | null;
   photoUrl?: string | null;
+  /** current canonical business Employee ID (agents.agent_code /
+   *  closers.closer_code); null/absent when the user has no staff record */
+  employeeCode?: string | null;
 }
 
 export function initialsOf(name: string): string {
@@ -37,7 +40,7 @@ export function toSessionUser(
     role: pu.role,
     designation: ROLE_LABEL[pu.role] ?? pu.role,
     process: processOverride ?? pu.process,
-    employeeId: "",
+    employeeId: pu.employeeCode ?? "",
     initials: initialsOf(pu.fullName),
     email: pu.email,
   };

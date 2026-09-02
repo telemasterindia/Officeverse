@@ -21,6 +21,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireUser, requestInfo } from "@/server/context";
 import * as svc from "@/server/hr/payroll-service";
+import * as register from "@/server/hr/payroll-register-service";
 
 const ymd = z
   .string()
@@ -33,9 +34,22 @@ const month = z
 const processCode = z.enum(["US", "UK", "IN", "AU"]);
 const payrollStatus = z.enum(["DRAFT", "CALCULATED", "APPROVED", "LOCKED"]);
 const userId = z.coerce.number().int().positive();
+/**
+ * FULL canonical business Employee ID — opaque string, never coerced to a
+ * number, prefix + leading zeros preserved. `TMI_CC_###` → Agent, `TMI_CL_###`
+ * → Closer. The server resolves this to `users.id`; a bare `010` / `10` is
+ * rejected because it is ambiguous between an Agent and a Closer.
+ */
+const employeeId = z
+  .string()
+  .trim()
+  .regex(
+    /^(TMI_CC_\d{3,}|TMI_CL_\d{3,})$/,
+    "Enter a full Employee ID, e.g. TMI_CC_010 (Agent) or TMI_CL_010 (Closer)",
+  );
 
 const setSalaryInput = z.object({
-  userId,
+  employee_id: employeeId,
   // configuration value, not a payroll result — Admin/HR only, bounded & non-negative
   baseSalary: z.coerce.number().finite().min(0).max(100_000_000),
   effectiveFrom: ymd,
@@ -43,11 +57,14 @@ const setSalaryInput = z.object({
 });
 
 const salaryListInput = z
-  .object({ employee: z.string().trim().max(191).optional() })
+  .object({
+    employee: z.string().trim().max(191).optional(),
+    process: processCode.optional(),
+  })
   .partial()
   .default({});
 
-const calcInput = z.object({ userId, month });
+const calcInput = z.object({ employee_id: employeeId, month });
 const approveInput = z.object({ userId, month });
 const lockInput = z.object({ userId, month });
 const reopenInput = z.object({ userId, month, reason: z.string().trim().min(3).max(255) });
@@ -70,7 +87,9 @@ export const setSalaryProfileFn = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => setSalaryInput.parse(d))
   .handler(async ({ data }): Promise<{ id: number }> => {
     const user = await requireUser();
-    const { userId: target, ...rest } = data;
+    const { employee_id, ...rest } = data;
+    // canonical Employee ID → internal users.id BEFORE any DB write
+    const target = await svc.resolveEmployeeUserId(employee_id);
     return svc.setSalaryProfile(user, target, rest, requestInfo());
   });
 
@@ -87,7 +106,9 @@ export const calculatePayrollFn = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => calcInput.parse(d))
   .handler(async ({ data }) => {
     const user = await requireUser();
-    return svc.calculatePayrollForEmployee(user, data.userId, data.month, requestInfo());
+    // canonical Employee ID → internal users.id BEFORE calculating
+    const target = await svc.resolveEmployeeUserId(data.employee_id);
+    return svc.calculatePayrollForEmployee(user, target, data.month, requestInfo());
   });
 
 export const approvePayrollFn = createServerFn({ method: "POST" })
@@ -239,4 +260,37 @@ export const payrollBreakdownFn = createServerFn({ method: "GET" })
   .handler(async ({ data }) => {
     const user = await requireUser();
     return svc.payrollBreakdown(user, data.userId, data.month);
+  });
+
+/* ============ Monthly Attendance Register + Consolidated Payroll ========= *
+ * Read-only, ALL employees at once. The service asserts Admin/HR (same gate as
+ * every other payroll read) and never persists a run.                        */
+
+const registerInput = z
+  .object({
+    month,
+    process: processCode.optional(),
+    q: z.string().trim().max(191).optional(),
+  })
+  .strict();
+
+export const attendanceRegisterFn = createServerFn({ method: "GET" })
+  .inputValidator((d: unknown) => registerInput.parse(d))
+  .handler(async ({ data }): Promise<register.AttendanceRegister> => {
+    const user = await requireUser();
+    return register.monthlyAttendanceRegister(user, data);
+  });
+
+export const consolidatedPayrollFn = createServerFn({ method: "GET" })
+  .inputValidator((d: unknown) => registerInput.parse(d))
+  .handler(async ({ data }): Promise<register.ConsolidatedPayroll> => {
+    const user = await requireUser();
+    return register.consolidatedPayroll(user, data);
+  });
+
+export const calculateAllPayrollFn = createServerFn({ method: "POST" })
+  .inputValidator((d: unknown) => registerInput.parse(d))
+  .handler(async ({ data }): Promise<register.CalculateAllResult> => {
+    const user = await requireUser();
+    return register.calculateAllPayroll(user, data, requestInfo());
   });

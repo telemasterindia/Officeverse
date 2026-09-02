@@ -28,9 +28,11 @@ import {
   slipSnapshotEquals,
   type SlipSnapshot,
 } from "./salary-slip";
-import { renderSalarySlipPdf, sha256Hex } from "./salary-slip-pdf";
+import { renderSalarySlipPdf, sha256Hex, type SalarySlipPdfData } from "./salary-slip-pdf";
 import { buildSalarySlipEmail } from "./salary-slip-email";
 import { getSalarySlipStore, salarySlipStorageKey } from "./salary-slip-storage";
+import { getCompanyBranding, getCompanyLogo } from "../branding/service";
+import { getAgentByUserId, getCloserByUserId } from "../db/repos/staff";
 import * as payrollRepo from "../db/repos/payroll";
 import * as repo from "../db/repos/salary-slip";
 import type { NewSalarySlip, PayrollRun, SalarySlip, User } from "@/lib/db/schema";
@@ -58,11 +60,20 @@ export interface SalarySlipDTO {
   version: number;
   status: string;
   isPreview: boolean;
+  employeeCode: string;
+  joiningDate: string | null;
   baseSalary: string;
+  payableBaseSalary: string;
   regularityBonus: number;
   calculatedSalary: string;
   leaveCount: number;
   offCount: number;
+  unpaidLeaveDays: number;
+  lateShortCount: number;
+  lateFullCount: number;
+  lateUnits: string;
+  lateDeduction: string;
+  companyName: string;
   payrollStatusAtGeneration: string;
   calculationVersion: string;
   fileName: string;
@@ -84,11 +95,20 @@ function slipDTO(s: SalarySlip): SalarySlipDTO {
     version: s.version,
     status: s.status,
     isPreview: s.isPreview,
+    employeeCode: s.employeeCode,
+    joiningDate: s.joiningDate ?? null,
     baseSalary: s.baseSalary,
+    payableBaseSalary: s.payableBaseSalary,
     regularityBonus: s.regularityBonus,
     calculatedSalary: s.calculatedSalary,
     leaveCount: s.leaveCount,
     offCount: s.offCount,
+    unpaidLeaveDays: s.unpaidLeaveDays,
+    lateShortCount: s.lateShortCount,
+    lateFullCount: s.lateFullCount,
+    lateUnits: s.lateUnits,
+    lateDeduction: s.lateDeduction,
+    companyName: s.companyName,
     payrollStatusAtGeneration: s.payrollStatusAtGeneration,
     calculationVersion: s.calculationVersion,
     fileName: s.fileName,
@@ -102,38 +122,113 @@ function slipDTO(s: SalarySlip): SalarySlipDTO {
 
 /* --------------------------- rendering ----------------------- */
 
-function renderBytesFor(slip: {
+/** Every field the deterministic renderer needs — all snapshotted on the row so
+ *  a re-render is byte-identical (Admin UAT Batch-2 follow-up §3). */
+interface SlipRenderSource {
   employeeName: string;
+  employeeCode: string;
   userId: number;
+  joiningDate: string | null;
   process: string;
   periodMonth: string;
   baseSalary: string;
+  payableBaseSalary: string;
   regularityBonus: number;
   calculatedSalary: string;
   leaveCount: number;
   offCount: number;
+  unpaidLeaveDays: number;
+  lateShortCount: number;
+  lateFullCount: number;
+  lateUnits: string;
+  lateDeduction: string;
   payrollStatusAtGeneration: string;
   calculationVersion: string;
   version: number;
   isPreview: boolean;
   generatedAt: string;
-}): Uint8Array {
-  return renderSalarySlipPdf({
-    employeeName: slip.employeeName,
-    userId: slip.userId,
-    process: slip.process,
-    periodMonth: slip.periodMonth,
-    baseSalary: slip.baseSalary,
-    regularityBonus: slip.regularityBonus,
-    calculatedSalary: slip.calculatedSalary,
-    leaveCount: slip.leaveCount,
-    offCount: slip.offCount,
-    payrollStatus: slip.payrollStatusAtGeneration,
-    calculationVersion: slip.calculationVersion,
-    slipVersion: slip.version,
-    isPreview: slip.isPreview,
-    generatedAt: slip.generatedAt,
-  });
+  companyName: string;
+  companyLegalName: string | null;
+  companyAddress: string | null;
+  companyTaxId: string | null;
+  companyFooter: string | null;
+  companyLogoMime: string | null;
+  companyLogoData: string | null;
+}
+
+function pdfDataFrom(s: SlipRenderSource): SalarySlipPdfData {
+  return {
+    companyName: s.companyName,
+    companyLegalName: s.companyLegalName,
+    companyAddress: s.companyAddress,
+    companyTaxId: s.companyTaxId,
+    companyFooter: s.companyFooter,
+    logo:
+      s.companyLogoData && s.companyLogoMime
+        ? { mime: s.companyLogoMime, dataBase64: s.companyLogoData }
+        : null,
+    employeeName: s.employeeName,
+    employeeCode: s.employeeCode,
+    userId: s.userId,
+    joiningDate: s.joiningDate,
+    process: s.process,
+    periodMonth: s.periodMonth,
+    baseSalary: s.baseSalary,
+    payableBaseSalary: s.payableBaseSalary,
+    regularityBonus: s.regularityBonus,
+    leaveCount: s.leaveCount,
+    offCount: s.offCount,
+    unpaidLeaveDays: s.unpaidLeaveDays,
+    lateShortCount: s.lateShortCount,
+    lateFullCount: s.lateFullCount,
+    lateUnits: s.lateUnits,
+    lateDeduction: s.lateDeduction,
+    calculatedSalary: s.calculatedSalary,
+    payrollStatus: s.payrollStatusAtGeneration,
+    calculationVersion: s.calculationVersion,
+    slipVersion: s.version,
+    isPreview: s.isPreview,
+    generatedAt: s.generatedAt,
+  };
+}
+
+function renderBytesFor(s: SlipRenderSource): Uint8Array {
+  return renderSalarySlipPdf(pdfDataFrom(s));
+}
+
+/** The employee's business code + joining date for the slip identity block. */
+async function slipIdentity(
+  userId: number,
+): Promise<{ employeeCode: string; joiningDate: string | null }> {
+  const agent = await getAgentByUserId(userId);
+  if (agent) return { employeeCode: agent.agentCode, joiningDate: agent.joiningDate ?? null };
+  const closer = await getCloserByUserId(userId);
+  if (closer) return { employeeCode: closer.closerCode, joiningDate: null };
+  return { employeeCode: `user${userId}`, joiningDate: null };
+}
+
+/** Company identity from the ONE central branding source, snapshotted onto the
+ *  slip row so a re-render is deterministic even after branding later changes. */
+async function slipBranding(): Promise<{
+  companyName: string;
+  companyLegalName: string | null;
+  companyAddress: string | null;
+  companyTaxId: string | null;
+  companyFooter: string | null;
+  companyLogoMime: string | null;
+  companyLogoData: string | null;
+}> {
+  const b = await getCompanyBranding();
+  const logo = await getCompanyLogo();
+  return {
+    companyName: b.companyName,
+    companyLegalName: b.legalName ?? null,
+    companyAddress: b.addressLine ?? null,
+    companyTaxId: b.taxId ?? null,
+    companyFooter: b.documentFooter ?? null,
+    companyLogoMime: logo ? logo.mime : null,
+    companyLogoData: logo ? Buffer.from(logo.bytes).toString("base64") : null,
+  };
 }
 
 /* --------------------------- generate ----------------------- */
@@ -176,15 +271,33 @@ export async function generateSlipForRun(
   const emp = await getUserById(run.userId);
   if (!emp) throw new HttpError(404, "Employee not found", "not_found");
 
-  const snapshot: SlipSnapshot = buildSlipSnapshot(run);
+  const identity = await slipIdentity(emp.id);
+  const branding = await slipBranding();
+  const snapshot: SlipSnapshot = buildSlipSnapshot(run, {
+    employeeCode: identity.employeeCode,
+    joiningDate: identity.joiningDate,
+    branding: {
+      companyName: branding.companyName,
+      legalName: branding.companyLegalName,
+      address: branding.companyAddress,
+      taxId: branding.companyTaxId,
+      footer: branding.companyFooter,
+      logoMime: branding.companyLogoMime,
+      logoDataBase64: branding.companyLogoData,
+    },
+  });
   const latest = await repo.latestSalarySlipForRun(run.id, db);
 
-  // idempotent: identical figures + same preview flag → return the existing doc
+  // idempotent: identical payroll FIGURES + same preview flag → return the
+  // existing doc (identity / branding are not part of the equality).
   if (
     latest &&
     latest.isPreview === elig.isPreview &&
     slipSnapshotEquals(
-      buildSlipSnapshot({ ...latest, status: latest.payrollStatusAtGeneration }),
+      buildSlipSnapshot(
+        { ...latest, status: latest.payrollStatusAtGeneration },
+        { employeeCode: "", joiningDate: null, branding: snapshot.branding },
+      ),
       snapshot,
     )
   ) {
@@ -196,22 +309,32 @@ export async function generateSlipForRun(
   const fileName = sanitizeSlipFilename(run.periodMonth, emp.fullName, emp.id, elig.isPreview);
   const storageKey = salarySlipStorageKey(emp.id, run.periodMonth, version);
 
-  const bytes = renderBytesFor({
+  const renderSource: SlipRenderSource = {
     employeeName: emp.fullName,
+    employeeCode: identity.employeeCode,
     userId: emp.id,
+    joiningDate: identity.joiningDate,
     process: run.process,
     periodMonth: run.periodMonth,
     baseSalary: snapshot.baseSalary,
+    payableBaseSalary: snapshot.payableBaseSalary,
     regularityBonus: snapshot.regularityBonus,
     calculatedSalary: snapshot.calculatedSalary,
     leaveCount: snapshot.leaveCount,
     offCount: snapshot.offCount,
+    unpaidLeaveDays: snapshot.unpaidLeaveDays,
+    lateShortCount: snapshot.lateShortCount,
+    lateFullCount: snapshot.lateFullCount,
+    lateUnits: snapshot.lateUnits,
+    lateDeduction: snapshot.lateDeduction,
     payrollStatusAtGeneration: snapshot.payrollStatusAtGeneration,
     calculationVersion: snapshot.calculationVersion,
     version,
     isPreview: elig.isPreview,
     generatedAt: now,
-  });
+    ...branding,
+  };
+  const bytes = renderBytesFor(renderSource);
   await getSalarySlipStore().put(storageKey, bytes);
 
   const v: NewSalarySlip = {
@@ -225,10 +348,26 @@ export async function generateSlipForRun(
     employeeEmail: emp.email,
     process: run.process,
     baseSalary: snapshot.baseSalary,
+    monthlyBaseSalary: snapshot.monthlyBaseSalary,
+    payableBaseSalary: snapshot.payableBaseSalary,
     regularityBonus: snapshot.regularityBonus,
     calculatedSalary: snapshot.calculatedSalary,
     leaveCount: snapshot.leaveCount,
     offCount: snapshot.offCount,
+    unpaidLeaveDays: snapshot.unpaidLeaveDays,
+    lateShortCount: snapshot.lateShortCount,
+    lateFullCount: snapshot.lateFullCount,
+    lateUnits: snapshot.lateUnits,
+    lateDeduction: snapshot.lateDeduction,
+    employeeCode: identity.employeeCode,
+    joiningDate: identity.joiningDate,
+    companyName: branding.companyName,
+    companyLegalName: branding.companyLegalName,
+    companyAddress: branding.companyAddress,
+    companyTaxId: branding.companyTaxId,
+    companyFooter: branding.companyFooter,
+    companyLogoMime: branding.companyLogoMime,
+    companyLogoData: branding.companyLogoData,
     payrollStatusAtGeneration: snapshot.payrollStatusAtGeneration,
     calculationVersion: snapshot.calculationVersion,
     fileName,
@@ -269,22 +408,38 @@ export async function generateSlipForRun(
 
 /* ----------------------------- send ------------------------- */
 
+/** Re-render EXACTLY from the frozen row (never re-reads branding / payroll). */
 function regenerateSlipBytes(slip: SalarySlip): Uint8Array {
   return renderBytesFor({
     employeeName: slip.employeeName,
+    employeeCode: slip.employeeCode || `user${slip.userId}`,
     userId: slip.userId,
+    joiningDate: slip.joiningDate ?? null,
     process: slip.process,
     periodMonth: slip.periodMonth,
     baseSalary: slip.baseSalary,
+    payableBaseSalary: slip.payableBaseSalary,
     regularityBonus: slip.regularityBonus,
     calculatedSalary: slip.calculatedSalary,
     leaveCount: slip.leaveCount,
     offCount: slip.offCount,
+    unpaidLeaveDays: slip.unpaidLeaveDays,
+    lateShortCount: slip.lateShortCount,
+    lateFullCount: slip.lateFullCount,
+    lateUnits: slip.lateUnits,
+    lateDeduction: slip.lateDeduction,
     payrollStatusAtGeneration: slip.payrollStatusAtGeneration,
     calculationVersion: slip.calculationVersion,
     version: slip.version,
     isPreview: slip.isPreview,
     generatedAt: slip.generatedAt,
+    companyName: slip.companyName,
+    companyLegalName: slip.companyLegalName ?? null,
+    companyAddress: slip.companyAddress ?? null,
+    companyTaxId: slip.companyTaxId ?? null,
+    companyFooter: slip.companyFooter ?? null,
+    companyLogoMime: slip.companyLogoMime ?? null,
+    companyLogoData: slip.companyLogoData ?? null,
   });
 }
 

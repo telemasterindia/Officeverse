@@ -7,6 +7,7 @@ import {
   canReassignAssignments,
   isAssignmentWorkType,
   WORKTYPE_ROLE,
+  WORKTYPE_SOURCE_ROLE,
   WORKTYPE_SUBJECT,
 } from "../authz/assignments";
 
@@ -34,9 +35,14 @@ describe("Assignment Control — work types map to the right role + subject", ()
     expect(WORKTYPE_ROLE.CLOSER_FOLLOWUPS).toBe("closer");
     expect(WORKTYPE_SUBJECT.CLOSER_FOLLOWUPS).toBe("follow_up");
   });
+  it("closer follow-ups → AGENT / follow_up (§8 — Admin can move a closer's FU to an agent)", () => {
+    expect(WORKTYPE_ROLE.CLOSER_FOLLOWUPS_TO_AGENT).toBe("agent");
+    expect(WORKTYPE_SUBJECT.CLOSER_FOLLOWUPS_TO_AGENT).toBe("follow_up");
+    expect(WORKTYPE_SOURCE_ROLE.CLOSER_FOLLOWUPS_TO_AGENT).toBe("closer");
+  });
   it("rejects an unknown work type", () => {
     expect(isAssignmentWorkType("AGENT_LEADS")).toBe(false);
-    expect(ASSIGNMENT_WORK_TYPES).toHaveLength(3);
+    expect(ASSIGNMENT_WORK_TYPES).toHaveLength(4);
   });
 });
 
