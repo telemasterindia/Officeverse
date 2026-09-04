@@ -36,6 +36,12 @@ export const Route = createFileRoute("/api/diag/login")({
           if (err instanceof HttpError) {
             return Response.json({ error: err.message }, { status: err.status, headers: NO_STORE });
           }
+          // Unexpected — log only the error's class/name for Vercel Runtime
+          // Logs, never `.message` (could embed request/connection detail).
+          console.error(
+            "[api/diag/login] unexpected error:",
+            err instanceof Error ? err.constructor.name : typeof err,
+          );
           return Response.json({ error: "internal error" }, { status: 500, headers: NO_STORE });
         }
       },
