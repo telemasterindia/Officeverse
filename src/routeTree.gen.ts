@@ -52,6 +52,7 @@ import { Route as ShellFollowupsFollowUpIdRouteImport } from './routes/_shell.fo
 import { Route as ShellLeadsIndexRouteImport } from './routes/_shell.leads.index'
 import { Route as ShellLeadsLeadIdRouteImport } from './routes/_shell.leads.$leadId'
 import { Route as ShellLeadsNewRouteImport } from './routes/_shell.leads.new'
+import { Route as ApiDiagLoginRouteImport } from './routes/api/diag/login'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -268,6 +269,11 @@ const ShellLeadsNewRoute = ShellLeadsNewRouteImport.update({
   path: '/leads/new',
   getParentRoute: () => ShellRoute,
 } as any)
+const ApiDiagLoginRoute = ApiDiagLoginRouteImport.update({
+  id: '/api/diag/login',
+  path: '/api/diag/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -307,6 +313,7 @@ export interface FileRoutesByFullPath {
   '/followups/$followUpId': typeof ShellFollowupsFollowUpIdRoute
   '/leads/$leadId': typeof ShellLeadsLeadIdRoute
   '/leads/new': typeof ShellLeadsNewRoute
+  '/api/diag/login': typeof ApiDiagLoginRoute
   '/agents/': typeof ShellAgentsIndexRoute
   '/clients/': typeof ShellClientsIndexRoute
   '/closers/': typeof ShellClosersIndexRoute
@@ -351,6 +358,7 @@ export interface FileRoutesByTo {
   '/followups/$followUpId': typeof ShellFollowupsFollowUpIdRoute
   '/leads/$leadId': typeof ShellLeadsLeadIdRoute
   '/leads/new': typeof ShellLeadsNewRoute
+  '/api/diag/login': typeof ApiDiagLoginRoute
   '/agents': typeof ShellAgentsIndexRoute
   '/clients': typeof ShellClientsIndexRoute
   '/closers': typeof ShellClosersIndexRoute
@@ -397,6 +405,7 @@ export interface FileRoutesById {
   '/_shell/followups/$followUpId': typeof ShellFollowupsFollowUpIdRoute
   '/_shell/leads/$leadId': typeof ShellLeadsLeadIdRoute
   '/_shell/leads/new': typeof ShellLeadsNewRoute
+  '/api/diag/login': typeof ApiDiagLoginRoute
   '/_shell/agents/': typeof ShellAgentsIndexRoute
   '/_shell/clients/': typeof ShellClientsIndexRoute
   '/_shell/closers/': typeof ShellClosersIndexRoute
@@ -443,6 +452,7 @@ export interface FileRouteTypes {
     | '/followups/$followUpId'
     | '/leads/$leadId'
     | '/leads/new'
+    | '/api/diag/login'
     | '/agents/'
     | '/clients/'
     | '/closers/'
@@ -487,6 +497,7 @@ export interface FileRouteTypes {
     | '/followups/$followUpId'
     | '/leads/$leadId'
     | '/leads/new'
+    | '/api/diag/login'
     | '/agents'
     | '/clients'
     | '/closers'
@@ -532,6 +543,7 @@ export interface FileRouteTypes {
     | '/_shell/followups/$followUpId'
     | '/_shell/leads/$leadId'
     | '/_shell/leads/new'
+    | '/api/diag/login'
     | '/_shell/agents/'
     | '/_shell/clients/'
     | '/_shell/closers/'
@@ -543,6 +555,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ShellRoute: typeof ShellRouteWithChildren
   OfficeTvRoute: typeof OfficeTvRoute
+  ApiDiagLoginRoute: typeof ApiDiagLoginRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -848,6 +861,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ShellLeadsNewRouteImport
       parentRoute: typeof ShellRoute
     }
+    '/api/diag/login': {
+      id: '/api/diag/login'
+      path: '/api/diag/login'
+      fullPath: '/api/diag/login'
+      preLoaderRoute: typeof ApiDiagLoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -943,6 +963,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ShellRoute: ShellRouteWithChildren,
   OfficeTvRoute: OfficeTvRoute,
+  ApiDiagLoginRoute: ApiDiagLoginRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
