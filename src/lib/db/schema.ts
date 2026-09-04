@@ -30,6 +30,7 @@ import { relations } from "drizzle-orm";
 import {
   bigint,
   boolean,
+  customType,
   date,
   datetime,
   decimal,
@@ -44,6 +45,13 @@ import {
   varchar,
   type AnyMySqlColumn,
 } from "drizzle-orm/mysql-core";
+
+/** Arbitrary binary bytes, stored as a genuine SQL LONGBLOB (not base64 text). */
+const longblob = customType<{ data: Buffer }>({
+  dataType() {
+    return "longblob";
+  },
+});
 
 /* ------------------------------------------------------------------ *
  *  Enums (shared literal sets — mirror src/lib/officeverse/types.ts) *
@@ -146,7 +154,7 @@ export const IMPORT_ROW_DECISIONS = [
 export const IMPORT_ROW_TARGETS = ["lead", "follow_up"] as const;
 
 export const AUDIT_ACTOR_ROLES = ["admin", "agent", "closer", "hr", "system"] as const;
-export const PHOTO_STORAGES = ["local", "s3", "r2", "supabase"] as const;
+export const PHOTO_STORAGES = ["local", "s3", "r2", "supabase", "database", "memory"] as const;
 export const LEAD_ASSIGNMENT_ACTIONS = ["assign", "reassign", "unassign"] as const;
 
 /* HR Attendance Foundation (Phase 10) — raw-fact enums. Off-conversion,
@@ -773,6 +781,26 @@ export const staffPhotos = mysqlTable(
     userIdx: index("staff_photos_user_idx").on(t.userId),
   }),
 );
+
+/* ------------------------------------------------------------------ *
+ *  13a · storage_blobs  (durable key→bytes store, existing MySQL DB) *
+ *  Backs the Vercel-safe "database" provider for photo-storage.ts and *
+ *  live/asset-storage.ts — the same role `company_profile.logo_data`  *
+ *  already plays for the company logo, generalised to a keyed table   *
+ *  instead of one singleton row. Callers own the key namespace        *
+ *  (e.g. "photos/…", "celebrations/…"); this table has no opinion on  *
+ *  what a key means. NOT for large/unbounded files — salary-slip PDFs *
+ *  and lead documents keep their existing filesystem/memory stores.   *
+ * ------------------------------------------------------------------ */
+
+export const storageBlobs = mysqlTable("storage_blobs", {
+  storageKey: varchar("storage_key", { length: 500 }).primaryKey(),
+  bytes: longblob("bytes").notNull(),
+  mime: varchar("mime", { length: 100 }),
+  sizeBytes: int("size_bytes", { unsigned: true }).notNull(),
+  createdAt: dt("created_at").notNull(),
+  updatedAt: dt("updated_at"),
+});
 
 /* ------------------------------------------------------------------ *
  *  14 · sessions  (server-side auth — httpOnly cookie holds the id)  *
@@ -2636,6 +2664,8 @@ export type NewImportRow = typeof importRows.$inferInsert;
 export type ImportError = typeof importErrors.$inferSelect;
 export type NewImportError = typeof importErrors.$inferInsert;
 export type StaffPhoto = typeof staffPhotos.$inferSelect;
+export type StorageBlob = typeof storageBlobs.$inferSelect;
+export type NewStorageBlob = typeof storageBlobs.$inferInsert;
 export type Session = typeof sessions.$inferSelect;
 export type NewSession = typeof sessions.$inferInsert;
 export type OfficeNetwork = typeof officeNetworks.$inferSelect;

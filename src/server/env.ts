@@ -52,7 +52,8 @@ export const config = {
   sessionTtlHours: () => envInt("SESSION_TTL_HOURS", 12),
   emailFrom: () => env("EMAIL_FROM") ?? "no-reply@officeverse.local",
   emailReplyTo: () => env("EMAIL_REPLY_TO"),
-  photoStorage: () => (env("PHOTO_STORAGE") ?? "local") as "local" | "s3" | "r2" | "supabase",
+  photoStorage: () =>
+    (env("PHOTO_STORAGE") ?? "local") as "local" | "s3" | "r2" | "supabase" | "database",
   photoLocalDir: () => env("PHOTO_LOCAL_DIR") ?? "./storage/photos",
   photoPublicBase: () => env("PHOTO_PUBLIC_BASE") ?? "/media/photos",
   // Admin UAT Batch-2 §2 — official employee photos: allow a normal
