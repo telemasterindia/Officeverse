@@ -5,6 +5,9 @@
  *   GET  /api/health?deep=1             → + live DB / migration check (cron secret)
  *   POST /internal/monthly-salary-slips → monthly salary-slip delivery batch
  *                                         (cron secret; dryRun=true by default)
+ *   POST /internal/reset-admin-password → one-off ADMIN password reset, using the
+ *                                         app's own hashPassword() (cron secret;
+ *                                         dryRun=true by default; admin accounts only)
  *   POST /internal/tick                 → reminder scheduler pass   (not built yet)
  *   POST /internal/drain-email          → email-job outbox drain    (not built yet)
  *
@@ -17,7 +20,7 @@
  * to the normal SSR handler.
  */
 import { env } from "./env";
-import { safeEqual } from "./session";
+import { safeEqual, revokeAllForUser } from "./session";
 import { nowIST } from "./time";
 import { collectHealth, publicLiveness } from "./health";
 import { processMonthlySalarySlips } from "./hr/salary-slip-batch";
@@ -27,6 +30,9 @@ import { tvState, tvAssetBytes } from "./live/tv-service";
 import { getCompanyLogo } from "./branding/service";
 import { HttpError } from "./http-error";
 import { isDbConfigured } from "@/lib/db";
+import { hashPassword } from "./password";
+import { findUserByEmail, setPasswordHash } from "./db/repos/users";
+import { recordAudit } from "./audit";
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -160,6 +166,77 @@ export async function handleInternal(request: Request): Promise<Response | null>
         502,
       );
     }
+  }
+
+  // ---- Production admin password reset (uses the app's own hashPassword()) --
+  // Guardrails: cron-secret only, ADMIN accounts only, dry-run by default,
+  // caller supplies the new password (never generated or guessed here), the
+  // password/hash are never logged or echoed back, and every existing session
+  // for the account is revoked so the old credential can't keep working.
+  if (path === "/internal/reset-admin-password") {
+    if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+    if (!cronAuthorized(request)) return json({ error: "unauthorized" }, 401);
+    if (!isDbConfigured()) return json({ error: "db_unavailable" }, 503);
+
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return json({ error: "invalid_json" }, 400);
+    }
+    const b = body as { email?: unknown; newPassword?: unknown };
+    const email = typeof b.email === "string" ? b.email.trim().toLowerCase() : "";
+    const newPassword = typeof b.newPassword === "string" ? b.newPassword : "";
+
+    if (!email) return json({ error: "email_required" }, 400);
+    if (newPassword.length < 8 || newPassword.length > 200) {
+      return json(
+        { error: "invalid_password", message: "newPassword must be 8-200 characters." },
+        400,
+      );
+    }
+
+    const user = await findUserByEmail(email);
+    if (!user) return json({ error: "not_found" }, 404);
+    if (user.role !== "admin") {
+      // This maintenance endpoint resets ADMIN accounts only — never a general
+      // password-reset backdoor for other roles.
+      return json({ error: "not_admin" }, 403);
+    }
+
+    // SAFE BY DEFAULT: validates + reports what it would do, unless the caller
+    // explicitly opts in with run=1 — same convention as the other /internal/* routes.
+    const dryRun = url.searchParams.get("run") !== "1";
+    if (dryRun) {
+      return json({
+        ok: true,
+        dryRun: true,
+        wouldReset: { email: user.email, userId: user.id, role: user.role, status: user.status },
+      });
+    }
+
+    // The SAME hashPassword() the login path's verifyPassword() is checked
+    // against — guarantees the stored hash matches whatever implementation
+    // (argon2id, or the bcrypt fallback) this running instance resolves to.
+    const newHash = await hashPassword(newPassword);
+    await setPasswordHash(user.id, newHash);
+    await revokeAllForUser(user.id); // force re-login everywhere with the new password
+
+    await recordAudit({
+      actorUserId: null,
+      actorRole: "system",
+      action: "admin.password_reset_internal",
+      entityType: "user",
+      entityId: user.id,
+      metadata: { via: "internal_http_cron", email: user.email },
+    });
+
+    return json({
+      ok: true,
+      dryRun: false,
+      reset: { email: user.email, userId: user.id },
+      note: "All existing sessions for this user were revoked. Log in with the new password and change it.",
+    });
   }
 
   if (path === "/internal/tick") {
