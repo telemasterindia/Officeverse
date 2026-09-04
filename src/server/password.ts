@@ -12,7 +12,6 @@
 type Hasher = {
   impl: "argon2id" | "bcrypt";
   hash: (plain: string) => Promise<string>;
-  verify: (hash: string, plain: string) => Promise<boolean>;
 };
 
 let _hasher: Promise<Hasher> | null = null;
@@ -37,13 +36,6 @@ async function build(): Promise<Hasher> {
     return {
       impl: "argon2id",
       hash: (plain) => argon2.hash(plain, ARGON2_OPTS),
-      verify: async (hash, plain) => {
-        try {
-          return await argon2.verify(hash, plain);
-        } catch {
-          return false;
-        }
-      },
     };
   } catch (err) {
     console.warn(
@@ -54,13 +46,6 @@ async function build(): Promise<Hasher> {
     return {
       impl: "bcrypt",
       hash: (plain) => bcrypt.hash(plain, BCRYPT_ROUNDS),
-      verify: async (hash, plain) => {
-        try {
-          return await bcrypt.compare(plain, hash);
-        } catch {
-          return false;
-        }
-      },
     };
   }
 }
@@ -76,10 +61,45 @@ export async function hashPassword(plain: string): Promise<string> {
   return (await hasher()).hash(plain);
 }
 
-/** Verify a plaintext password against a stored hash. Never throws. */
+/**
+ * Verify a plaintext password against a stored hash. Never throws.
+ *
+ * Hashes are self-describing (PHC `$argon2id$…` vs bcrypt `$2a$…` / `$2b$…` /
+ * `$2y$…`), so verification dispatches on the STORED hash's own prefix —
+ * NOT on whichever implementation `build()` happened to pick for hashing new
+ * passwords in this process. This matters because `build()`'s choice is a
+ * one-time, per-process probe (argon2 native binding present → argon2id,
+ * else bcrypt); a hash written in the other format would previously be
+ * unverifiable in that process even with the correct password, since e.g. an
+ * argon2id hash handed to `bcrypt.compare()` (or vice versa) is a format
+ * error, not a mismatch. Per-hash dispatch is also what makes bcrypt→argon2
+ * rehashing (`needsRehash`, below) actually work: a legacy bcrypt hash must
+ * still verify once argon2id becomes the active hasher for new hashes.
+ *
+ * The stored hash is trimmed before use — a hash hand-pasted into a DB admin
+ * tool (e.g. a phpMyAdmin textarea) can pick up a trailing newline/space,
+ * which would otherwise turn a correct hash into an unparseable one.
+ */
 export async function verifyPassword(hash: string, plain: string): Promise<boolean> {
   if (!hash || !plain) return false;
-  return (await hasher()).verify(hash, plain);
+  const h = hash.trim();
+  if (h.startsWith("$argon2")) {
+    try {
+      const argon2 = await import("@node-rs/argon2");
+      return await argon2.verify(h, plain);
+    } catch {
+      return false;
+    }
+  }
+  if (h.startsWith("$2")) {
+    try {
+      const bcrypt = (await import("bcryptjs")).default;
+      return await bcrypt.compare(plain, h);
+    } catch {
+      return false;
+    }
+  }
+  return false;
 }
 
 /** Which implementation is active ("argon2id" | "bcrypt"). */
