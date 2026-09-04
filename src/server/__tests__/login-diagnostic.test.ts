@@ -30,10 +30,19 @@ describe("runLoginDiagnostic — authentication (mirrors runSalarySlipCron)", ()
     expect(err.message).not.toContain("the-real-secret");
   });
 
-  it("with a valid secret it proceeds past auth (DB not configured here → db error, not auth error)", async () => {
+  it("with a valid secret, a DB failure is surfaced as `dbError` — never an opaque throw", async () => {
+    // Regression: earlier revision let a DB/driver error propagate as an
+    // unlabeled exception, which the route's catch-all turned into a bare
+    // 500 "internal error" — indistinguishable from any other bug and
+    // useless for diagnosing an actual DB connectivity problem. It must
+    // resolve, not reject, with the failure labeled.
     process.env["OFFICEVERSE_DIAG_SECRET"] = "the-real-secret";
-    const err = await captureError(() => runLoginDiagnostic({ secret: "the-real-secret" }));
-    expect(err.code).not.toBe("diag_forbidden");
-    expect(err.code).not.toBe("diag_not_configured");
+    const result = await runLoginDiagnostic({ secret: "the-real-secret" });
+    expect(result.dbError).toBeTruthy();
+    expect(result.adminRowExists).toBe(false);
+    expect(result.verifyReached).toBe(false);
+    expect(result.verifyResult).toBe(false);
+    // never leaks a connection string / credential fragment
+    expect(result.dbError).not.toMatch(/:\/\//);
   });
 });
