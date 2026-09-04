@@ -1,12 +1,19 @@
 /**
- * Officeverse — Live Experience: celebration-asset storage (Phase 21).
+ * Officeverse — Live Experience: celebration-asset storage (Phase 21 + Phase 24).
  *
  * PRIVATE storage for approved celebration videos. Bytes are served to the TV
  * through the token-authenticated state/asset endpoint, never a public URL.
  * Uploaded files are stored, never executed.
  *
  * Providers mirror the Phase-19 photo store:
- *   - "local"  → durable files under CELEBRATION_ASSET_DIR (default ./storage/celebrations)
+ *   - "local"    → durable files under CELEBRATION_ASSET_DIR (default
+ *                  ./storage/celebrations) — GoDaddy / local dev. NOT
+ *                  available on Vercel (no writable filesystem), where it's
+ *                  upgraded to "database" instead of silently falling back
+ *                  to memory.
+ *   - "database" → durable rows in the existing MySQL `storage_blobs` table
+ *                  (see server/db-blob-store.ts) — the Vercel-safe
+ *                  default. Selectable explicitly anywhere too.
  *   - anything else → in-memory dev store
  *
  * Path safety reuses `resolveDocumentPath` (rejects absolute keys, "..", NUL).
@@ -14,7 +21,9 @@
  */
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { resolve, sep } from "node:path";
+import { isDbConfigured } from "@/lib/db";
 import { env, isVercel } from "../env";
+import { DatabaseBlobStore } from "../db-blob-store";
 import { resolveDocumentPath } from "../hr/salary-slip-storage";
 
 export interface AssetStore {
@@ -66,31 +75,50 @@ class FilesystemAssetStore implements AssetStore {
 
 let cached: { key: string; store: AssetStore } | null = null;
 
-export function getAssetStore(): AssetStore {
+function resolveBackend(): { kind: "local" | "database" | "memory"; cacheKey: string } {
   const provider = (env("CELEBRATION_STORAGE") ?? env("PHOTO_STORAGE") ?? "local").toLowerCase();
-  // Same Vercel guard as the photo store: no writable filesystem outside
-  // /tmp, so "local" would otherwise mkdir under process.cwd() (/var/task)
-  // and throw ENOENT. Celebration clips are a cosmetic Live-Experience
-  // feature, not a durable business record, so the safe degrade is the
-  // SAME in-memory store already used for any other unconfigured provider.
-  const useLocalFs = provider === "local" && !isVercel();
-  if (provider === "local" && isVercel()) {
-    console.warn(
-      "[asset-storage] local celebration-asset storage is not supported on Vercel (no writable filesystem) — using the in-memory store instead.",
-    );
+  if (provider === "database") return { kind: "database", cacheKey: "database" };
+  if (provider === "local") {
+    // Same Vercel guard as the photo store: no writable filesystem outside
+    // /tmp, so "local" would otherwise mkdir under process.cwd() (/var/task)
+    // and throw ENOENT. Upgrade to the durable database-backed store instead
+    // of silently falling back to memory (which a cold start can drop) —
+    // only when the DB itself isn't configured either does this use memory,
+    // so an upload never crashes even in that dead-end state.
+    if (isVercel()) {
+      if (isDbConfigured()) return { kind: "database", cacheKey: "database" };
+      console.warn(
+        "[asset-storage] local celebration-asset storage is not supported on Vercel and no database is configured — using the in-memory store (uploads will NOT survive a cold start).",
+      );
+      return { kind: "memory", cacheKey: "memory" };
+    }
+    const root = env("CELEBRATION_ASSET_DIR") ?? "./storage/celebrations";
+    return { kind: "local", cacheKey: `local:${root}` };
   }
-  const root = env("CELEBRATION_ASSET_DIR") ?? "./storage/celebrations";
-  const cacheKey = `${useLocalFs ? "local" : "memory"}:${root}`;
+  return { kind: "memory", cacheKey: "memory" };
+}
+
+export function getAssetStore(): AssetStore {
+  const { kind, cacheKey } = resolveBackend();
   if (cached && cached.key === cacheKey) return cached.store;
-  const store: AssetStore = useLocalFs
-    ? new FilesystemAssetStore(resolve(root))
-    : new MemoryAssetStore();
+  const root = env("CELEBRATION_ASSET_DIR") ?? "./storage/celebrations";
+  const store: AssetStore =
+    kind === "local"
+      ? new FilesystemAssetStore(resolve(root))
+      : kind === "database"
+        ? new DatabaseBlobStore()
+        : new MemoryAssetStore();
   cached = { key: cacheKey, store };
   return store;
 }
 
 export function __resetAssetStore(): void {
   cached = null;
+}
+
+export function describeAssetStorage(): { provider: string; durable: boolean } {
+  const { kind } = resolveBackend();
+  return { provider: kind, durable: kind !== "memory" };
 }
 
 /** Server-generated storage key: `celebrations/<category>/<id>-<safeName>`. */

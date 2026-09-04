@@ -1,12 +1,18 @@
 /**
- * Officeverse — profile-photo storage abstraction (Phase 19).
+ * Officeverse — profile-photo storage abstraction (Phase 19 + Phase 24).
  *
  * PRIVATE storage — employee photos are internal company data. They are NEVER
  * served from an unauthenticated public URL; the client fetches the bytes
  * through an authenticated server function.
  *
  * Providers (chosen by PHOTO_STORAGE, reusing the existing config names):
- *   - "local" → durable files under PHOTO_LOCAL_DIR (default ./storage/photos)
+ *   - "local"    → durable files under PHOTO_LOCAL_DIR (default ./storage/photos)
+ *                  — GoDaddy / local dev. NOT available on Vercel (no writable
+ *                  filesystem), where it's upgraded to "database" instead
+ *                  (see below) rather than silently falling back to memory.
+ *   - "database" → durable rows in the existing MySQL `storage_blobs` table
+ *                  (see server/db-blob-store.ts) — the Vercel-safe
+ *                  default. Selectable explicitly anywhere too.
  *   - anything else (s3/r2/supabase) is not implemented here → in-memory dev store
  *
  * Path safety reuses `resolveDocumentPath` from the salary-slip storage module
@@ -15,7 +21,9 @@
  */
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { resolve, sep } from "node:path";
+import { isDbConfigured } from "@/lib/db";
 import { config, env, isVercel } from "../env";
+import { DatabaseBlobStore } from "../db-blob-store";
 import { resolveDocumentPath } from "./salary-slip-storage";
 
 export interface PhotoStore {
@@ -80,27 +88,44 @@ class FilesystemPhotoStore implements PhotoStore {
 
 let cached: { key: string; store: PhotoStore } | null = null;
 
-export function getPhotoStore(): PhotoStore {
+/**
+ * Resolve which backend `getPhotoStore()` should actually use. Split out so
+ * `describePhotoStorage()` (a status/diagnostics read) and `getPhotoStore()`
+ * agree exactly on what's really in effect.
+ */
+function resolveBackend(): { kind: "local" | "database" | "memory"; cacheKey: string } {
   const provider = (env("PHOTO_STORAGE") ?? "local").toLowerCase();
-  // Vercel Functions have no writable persistent filesystem — "local" would
-  // otherwise try to mkdir under process.cwd() (/var/task), which is
-  // read-only and throws ENOENT. A missing photo already falls back to a
-  // generated avatar everywhere it's displayed, so the safe degrade here is
-  // the SAME in-memory store already used for any other unconfigured
-  // provider — not a new storage backend, just not durable across cold
-  // starts on Vercel. GoDaddy/cPanel and local dev are unaffected.
-  const useLocalFs = provider === "local" && !isVercel();
-  if (provider === "local" && isVercel()) {
-    console.warn(
-      "[photo-storage] PHOTO_STORAGE=local is not supported on Vercel (no writable filesystem) — using the in-memory store instead.",
-    );
+  if (provider === "database") return { kind: "database", cacheKey: "database" };
+  if (provider === "local") {
+    // Vercel Functions have no writable persistent filesystem — "local"
+    // would otherwise try to mkdir under process.cwd() (/var/task), which
+    // is read-only and throws ENOENT. Upgrade to the durable database-backed
+    // store instead of silently degrading to memory (which a cold start can
+    // drop). Only when the DB itself isn't configured either — a dead-end
+    // state where essentially nothing in the app works — is memory used, so
+    // a photo upload never crashes even in that state.
+    if (isVercel()) {
+      if (isDbConfigured()) return { kind: "database", cacheKey: "database" };
+      console.warn(
+        "[photo-storage] PHOTO_STORAGE=local is not supported on Vercel and no database is configured — using the in-memory store (uploads will NOT survive a cold start).",
+      );
+      return { kind: "memory", cacheKey: "memory" };
+    }
+    return { kind: "local", cacheKey: `local:${config.photoLocalDir()}` };
   }
-  const root = useLocalFs ? config.photoLocalDir() : "";
-  const cacheKey = `${useLocalFs ? "local" : "memory"}:${root}`;
+  // s3 / r2 / supabase — named but not implemented; unchanged pre-existing behavior.
+  return { kind: "memory", cacheKey: "memory" };
+}
+
+export function getPhotoStore(): PhotoStore {
+  const { kind, cacheKey } = resolveBackend();
   if (cached && cached.key === cacheKey) return cached.store;
-  const store: PhotoStore = useLocalFs
-    ? new FilesystemPhotoStore(resolve(root || "./storage/photos"))
-    : new MemoryPhotoStore();
+  const store: PhotoStore =
+    kind === "local"
+      ? new FilesystemPhotoStore(resolve(config.photoLocalDir()))
+      : kind === "database"
+        ? new DatabaseBlobStore()
+        : new MemoryPhotoStore();
   cached = { key: cacheKey, store };
   return store;
 }
@@ -110,6 +135,6 @@ export function __resetPhotoStore(): void {
 }
 
 export function describePhotoStorage(): { provider: string; durable: boolean } {
-  const provider = (env("PHOTO_STORAGE") ?? "local").toLowerCase();
-  return { provider, durable: provider === "local" };
+  const { kind } = resolveBackend();
+  return { provider: kind, durable: kind !== "memory" };
 }

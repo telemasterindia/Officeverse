@@ -22,6 +22,15 @@ import { safePhotoKey, validatePhotoUpload, type PhotoMime } from "./photo";
 import { getPhotoStore } from "./photo-storage";
 import type { User } from "@/lib/db/schema";
 
+/** `PhotoStore.kind` ("filesystem" | "database" | "memory") → the
+ *  `staff_photos.storage` enum value, so the row honestly records where its
+ *  bytes actually live instead of always claiming "local". */
+function photoStoreEnumValue(kind: string): "local" | "database" | "memory" {
+  if (kind === "database") return "database";
+  if (kind === "memory") return "memory";
+  return "local"; // "filesystem"
+}
+
 type Meta = { ip?: string | null; userAgent?: string | null };
 
 export interface PhotoMetaDTO {
@@ -127,7 +136,7 @@ export async function setProfilePhoto(
     .insert(staffPhotos)
     .values({
       userId: targetUserId,
-      storage: "local",
+      storage: photoStoreEnumValue(store.kind),
       path: key,
       url: null,
       mime: v.mime,

@@ -4,7 +4,15 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { __resetPhotoStore, describePhotoStorage, getPhotoStore } from "../hr/photo-storage";
 
-const ENVK = ["PHOTO_STORAGE", "PHOTO_LOCAL_DIR", "VERCEL"] as const;
+const ENVK = [
+  "PHOTO_STORAGE",
+  "PHOTO_LOCAL_DIR",
+  "VERCEL",
+  "DATABASE_URL",
+  "DB_HOST",
+  "DB_NAME",
+  "DB_USER",
+] as const;
 function clearEnv() {
   for (const k of ENVK) delete process.env[k];
   __resetPhotoStore();
@@ -44,21 +52,43 @@ describe("photo store — Vercel guard (no writable filesystem)", () => {
     __resetPhotoStore();
   });
 
-  it("never constructs the filesystem store on Vercel, even with the default provider", () => {
-    expect(getPhotoStore().kind).toBe("memory");
-  });
-
-  it("put/get round-trips in memory instead of throwing ENOENT", async () => {
-    const s = getPhotoStore();
-    const bytes = new Uint8Array([9, 9, 9]);
-    await s.put("photos/u2/avatar.jpg", bytes);
-    const got = await s.get("photos/u2/avatar.jpg");
-    expect(got && Buffer.from(got).equals(Buffer.from(bytes))).toBe(true);
-  });
-
   it("still honors an explicit non-local provider the same as off-Vercel", () => {
     process.env["PHOTO_STORAGE"] = "s3";
     __resetPhotoStore();
     expect(getPhotoStore().kind).toBe("memory");
+  });
+});
+
+describe("photo store — database backend (Vercel-safe durable storage)", () => {
+  it("PHOTO_STORAGE=database is selectable explicitly, anywhere", () => {
+    process.env["PHOTO_STORAGE"] = "database";
+    __resetPhotoStore();
+    expect(getPhotoStore().kind).toBe("database");
+    expect(describePhotoStorage()).toEqual({ provider: "database", durable: true });
+  });
+
+  it("is used automatically on Vercel when the DB is configured, instead of memory", () => {
+    process.env["VERCEL"] = "1";
+    process.env["DATABASE_URL"] = "mysql://user:pass@example.invalid:3306/officeverse";
+    __resetPhotoStore();
+    expect(getPhotoStore().kind).toBe("database");
+    expect(describePhotoStorage()).toEqual({ provider: "database", durable: true });
+  });
+
+  it("falls back to memory only when Vercel AND no DB is configured at all", () => {
+    process.env["VERCEL"] = "1";
+    __resetPhotoStore();
+    expect(getPhotoStore().kind).toBe("memory");
+    expect(describePhotoStorage()).toEqual({ provider: "memory", durable: false });
+  });
+
+  it("rejects unsafe keys before ever reaching the database", async () => {
+    process.env["PHOTO_STORAGE"] = "database";
+    __resetPhotoStore();
+    const s = getPhotoStore();
+    await expect(s.put("../etc/passwd", new Uint8Array([1]))).rejects.toThrow();
+    await expect(s.get("/etc/passwd")).rejects.toThrow();
+    await expect(s.exists("")).rejects.toThrow();
+    await expect(s.deleteKey("x".repeat(501))).rejects.toThrow();
   });
 });
