@@ -21,7 +21,7 @@
 import { randomBytes } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { resolve, sep } from "node:path";
-import { env } from "../env";
+import { env, isVercel } from "../env";
 import { resolveDocumentPath } from "../hr/salary-slip-storage";
 import type { LeadDocMime } from "./document-validate";
 
@@ -82,6 +82,19 @@ export function getLeadDocStore(): LeadDocStore {
 
   let store: LeadDocStore;
   if (provider === "filesystem") {
+    // Vercel Functions have no writable persistent filesystem (not even a
+    // correctly-configured, GoDaddy-style absolute root — only /tmp exists,
+    // and that's scratch space for one invocation, not durable storage).
+    // Lead documents are compliance/business records: silently swapping to
+    // the in-memory store would look like a successful upload and then lose
+    // the bytes, which is worse than a clear, loud failure — so this
+    // refuses at construction time instead of failing deep inside
+    // mkdir/writeFile with a raw ENOENT.
+    if (isVercel()) {
+      throw new Error(
+        "DOCUMENT_STORAGE_PROVIDER=filesystem is not supported on Vercel — no persistent filesystem is available. Configure a real object-storage backend for lead documents before enabling this on Vercel.",
+      );
+    }
     if (!root) {
       throw new Error(
         "DOCUMENT_STORAGE_PROVIDER=filesystem requires OFFICEVERSE_DOCUMENT_ROOT to be set",

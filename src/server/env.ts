@@ -31,6 +31,20 @@ export function envBool(name: string, fallback = false): boolean {
 
 export const isProd = (): boolean => (env("NODE_ENV") ?? "development") === "production";
 
+/**
+ * True when this process is running as a Vercel Function (build or runtime).
+ * `VERCEL=1` is set automatically by the platform — never something we ask
+ * anyone to configure. GoDaddy/cPanel and local dev never set it.
+ *
+ * Vercel Functions have NO writable persistent filesystem outside `/tmp`
+ * (which is scratch space for one invocation, not durable storage) — unlike
+ * GoDaddy's plain Node host, where a configured local/filesystem storage
+ * root is a real, durable directory. Storage modules use this to refuse a
+ * local-disk write path on Vercel instead of failing with a raw ENOENT deep
+ * inside `mkdir`/`writeFile`.
+ */
+export const isVercel = (): boolean => env("VERCEL") === "1";
+
 /** Non-secret config bundle (safe to reference; never printed). */
 export const config = {
   appUrl: () => env("APP_URL") ?? "http://localhost:3000",

@@ -19,7 +19,7 @@
  */
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { isAbsolute, resolve, sep } from "node:path";
-import { env } from "../env";
+import { env, isVercel } from "../env";
 
 export interface SalarySlipStore {
   readonly kind: string;
@@ -161,6 +161,18 @@ export function getSalarySlipStore(): SalarySlipStore {
   const [provider] = key.split(":");
   let store: SalarySlipStore;
   if (provider === "filesystem") {
+    // Vercel Functions have no writable persistent filesystem (not even a
+    // correctly-configured, GoDaddy-style absolute root — only /tmp exists,
+    // and that's scratch space for one invocation, not durable storage).
+    // Salary slips are payroll records: silently swapping to the in-memory
+    // store would look like success and then lose the bytes, which is worse
+    // than a clear, loud failure — so this refuses at construction time
+    // instead of failing deep inside mkdir/writeFile with a raw ENOENT.
+    if (isVercel()) {
+      throw new Error(
+        "DOCUMENT_STORAGE_PROVIDER=filesystem is not supported on Vercel — no persistent filesystem is available. Configure a real object-storage backend for salary-slip PDFs before enabling this on Vercel.",
+      );
+    }
     const root = env("OFFICEVERSE_DOCUMENT_ROOT");
     if (!root) {
       throw new Error(

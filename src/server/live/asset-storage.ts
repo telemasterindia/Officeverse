@@ -14,7 +14,7 @@
  */
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { resolve, sep } from "node:path";
-import { env } from "../env";
+import { env, isVercel } from "../env";
 import { resolveDocumentPath } from "../hr/salary-slip-storage";
 
 export interface AssetStore {
@@ -68,11 +68,23 @@ let cached: { key: string; store: AssetStore } | null = null;
 
 export function getAssetStore(): AssetStore {
   const provider = (env("CELEBRATION_STORAGE") ?? env("PHOTO_STORAGE") ?? "local").toLowerCase();
+  // Same Vercel guard as the photo store: no writable filesystem outside
+  // /tmp, so "local" would otherwise mkdir under process.cwd() (/var/task)
+  // and throw ENOENT. Celebration clips are a cosmetic Live-Experience
+  // feature, not a durable business record, so the safe degrade is the
+  // SAME in-memory store already used for any other unconfigured provider.
+  const useLocalFs = provider === "local" && !isVercel();
+  if (provider === "local" && isVercel()) {
+    console.warn(
+      "[asset-storage] local celebration-asset storage is not supported on Vercel (no writable filesystem) — using the in-memory store instead.",
+    );
+  }
   const root = env("CELEBRATION_ASSET_DIR") ?? "./storage/celebrations";
-  const cacheKey = `${provider}:${root}`;
+  const cacheKey = `${useLocalFs ? "local" : "memory"}:${root}`;
   if (cached && cached.key === cacheKey) return cached.store;
-  const store: AssetStore =
-    provider === "local" ? new FilesystemAssetStore(resolve(root)) : new MemoryAssetStore();
+  const store: AssetStore = useLocalFs
+    ? new FilesystemAssetStore(resolve(root))
+    : new MemoryAssetStore();
   cached = { key: cacheKey, store };
   return store;
 }

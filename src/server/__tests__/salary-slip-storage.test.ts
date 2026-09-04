@@ -10,7 +10,7 @@ import {
   salarySlipStorageKey,
 } from "../hr/salary-slip-storage";
 
-const ENVK = ["DOCUMENT_STORAGE_PROVIDER", "OFFICEVERSE_DOCUMENT_ROOT"] as const;
+const ENVK = ["DOCUMENT_STORAGE_PROVIDER", "OFFICEVERSE_DOCUMENT_ROOT", "VERCEL"] as const;
 function clearEnv() {
   for (const k of ENVK) delete process.env[k];
   __resetSalarySlipStore();
@@ -114,5 +114,23 @@ describe("filesystem store (production shape)", () => {
     delete process.env["OFFICEVERSE_DOCUMENT_ROOT"];
     __resetSalarySlipStore();
     expect(() => getSalarySlipStore()).toThrow(/OFFICEVERSE_DOCUMENT_ROOT/);
+  });
+});
+
+describe("filesystem provider on Vercel — refuses instead of writing under /var/task", () => {
+  beforeEach(() => {
+    process.env["DOCUMENT_STORAGE_PROVIDER"] = "filesystem";
+    process.env["OFFICEVERSE_DOCUMENT_ROOT"] = "/home/cpanel-user/officeverse-documents";
+    process.env["VERCEL"] = "1";
+    __resetSalarySlipStore();
+  });
+
+  it("throws a clear config error even with a valid-looking root configured", () => {
+    expect(() => getSalarySlipStore()).toThrow(/not supported on Vercel/i);
+  });
+
+  it("never falls back to the in-memory store silently (no accidental data loss)", () => {
+    expect(() => getSalarySlipStore()).toThrow();
+    // and NOT: expect(getSalarySlipStore().kind).toBe("memory")
   });
 });

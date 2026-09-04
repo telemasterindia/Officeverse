@@ -15,7 +15,7 @@
  */
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { resolve, sep } from "node:path";
-import { config, env } from "../env";
+import { config, env, isVercel } from "../env";
 import { resolveDocumentPath } from "./salary-slip-storage";
 
 export interface PhotoStore {
@@ -82,13 +82,25 @@ let cached: { key: string; store: PhotoStore } | null = null;
 
 export function getPhotoStore(): PhotoStore {
   const provider = (env("PHOTO_STORAGE") ?? "local").toLowerCase();
-  const root = provider === "local" ? config.photoLocalDir() : "";
-  const cacheKey = `${provider}:${root}`;
+  // Vercel Functions have no writable persistent filesystem — "local" would
+  // otherwise try to mkdir under process.cwd() (/var/task), which is
+  // read-only and throws ENOENT. A missing photo already falls back to a
+  // generated avatar everywhere it's displayed, so the safe degrade here is
+  // the SAME in-memory store already used for any other unconfigured
+  // provider — not a new storage backend, just not durable across cold
+  // starts on Vercel. GoDaddy/cPanel and local dev are unaffected.
+  const useLocalFs = provider === "local" && !isVercel();
+  if (provider === "local" && isVercel()) {
+    console.warn(
+      "[photo-storage] PHOTO_STORAGE=local is not supported on Vercel (no writable filesystem) — using the in-memory store instead.",
+    );
+  }
+  const root = useLocalFs ? config.photoLocalDir() : "";
+  const cacheKey = `${useLocalFs ? "local" : "memory"}:${root}`;
   if (cached && cached.key === cacheKey) return cached.store;
-  const store: PhotoStore =
-    provider === "local"
-      ? new FilesystemPhotoStore(resolve(root || "./storage/photos"))
-      : new MemoryPhotoStore();
+  const store: PhotoStore = useLocalFs
+    ? new FilesystemPhotoStore(resolve(root || "./storage/photos"))
+    : new MemoryPhotoStore();
   cached = { key: cacheKey, store };
   return store;
 }
